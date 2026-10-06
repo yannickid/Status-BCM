@@ -30,6 +30,7 @@ putenv('SBCM_LOCAL_CONFIG=' . $local);
 
 define('SBCM', true);
 require __DIR__ . '/../lib.inc.php';
+require __DIR__ . '/../qr.inc.php';
 date_default_timezone_set('UTC');
 
 function b32_for_test(): string
@@ -268,6 +269,38 @@ ok(password_reminders(time() + 3600) === [], 'Keine Wiederholung vor Ablauf des 
 ok(count(password_reminders(time() + 8 * 86400)) === 1 && pw_state(users()['bert'], time() + 2 * 86400) === 'expired', 'Wiederholung nach 7 Tagen, danach abgelaufen');
 account_write('bert', ['pw_valid_until' => gmdate('Y-m-d H:i:s', time() - 60)], false, 'test');
 ok(user_needs_setup(users()['bert']) && verify_user('bert', 'Sonnenblume am Fenster 7') !== null, 'Abgelaufen: Login möglich, aber Wechsel erzwungen');
+
+/* --- Einstellungen aus dem Browser (System-Seite) --- */
+ok(cc_default_mail1() === 'cc1@test.example' && stage1_hash() === '', 'Ohne Browser-Einstellungen gelten die Werte der Konfigurationsdatei');
+ok(stage1_change('kurz', 'kurz', 'system:test') !== [] && stage1_change('Zugang fuer alle', 'anders', 'system:test') !== [], 'Zugangspasswort: Länge und Wiederholung geprüft');
+ok(stage1_change('Zugang fuer alle', 'Zugang fuer alle', 'system:test') === [] && verify_stage1('Zugang fuer alle') && stage1_set_at() !== '', 'Zugangspasswort gesetzt, Datum gespeichert');
+ok(stage1_change('Zugang fuer alle', 'Zugang fuer alle', 'system:test') !== [], 'Gleiches Zugangspasswort wird abgelehnt');
+ok(cc1_change('kaputt', 'system:test') !== null && cc1_change('Neu@Test.example', 'system:test') === null && cc_default_mail1() === 'neu@test.example', 'Kopie-Adresse ersetzt den Konfigurationswert');
+ok(recipients_add("a@ziel.example\nb@ziel.example; a@ziel.example", 'system:test') === [2, null] && count(alarm_recipients()) === 2, 'Empfänger hinzugefügt, Doppelte entfernt');
+ok(recipients_add('x@ziel.example, kaputt', 'system:test')[1] !== null && count(alarm_recipients()) === 2, 'Ungültige Adresse: nichts gespeichert');
+ok(recipients_remove(0, 'system:test') && alarm_recipients() === ['b@ziel.example'] && !recipients_remove(5, 'system:test'), 'Empfänger entfernt');
+$raw = kv_get('set:recipients');
+ok(!str_contains((string)$raw, 'ziel') && !setting_broken('recipients'), 'Einstellungen verschlüsselt gespeichert');
+kv_set('set:recipients', (string)kv_get('set:cc1'));
+setting_get('recipients', true);
+ok(setting_broken('recipients') && recipients_web() === [], 'Vertauschte Einstellung wird erkannt und nicht verwendet');
+$chk = system_check();
+ok(count(array_filter($chk, fn($c) => str_contains($c[1], 'Einstellung recipients nicht lesbar') && !$c[0])) === 1, 'Systemprüfung meldet die Manipulation');
+recipients_add('b@ziel.example', 'system:test');
+$labels = array_column(audit_recent(40), 'action');
+ok(in_array('setting.stage1', $labels, true) && in_array('setting.cc1', $labels, true) && in_array('setting.recipient_remove', $labels, true), 'Einstellungsänderungen im Audit-Log');
+
+/* --- config.local.inc.php (Installer) --- */
+$code = local_config_code(['db' => ['pass' => "a'b\\c"], 'security' => ['master_key' => 'k']]);
+$f = $tmp . '/roundtrip.php';
+file_put_contents($f, $code);
+ok((require $f)['db']['pass'] === "a'b\\c" && str_contains($code, "if (!defined('SBCM'))"), 'Konfigurationsdatei: Sonderzeichen sicher, Direktaufruf gesperrt');
+
+/* --- QR-Code --- */
+$m = qr_matrix(totp_uri('anna', 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP'));
+ok(count($m) >= 21 && count($m) === count($m[0]) && $m[0][0] && $m[0][6] && !$m[1][1] && $m[3][3], 'QR-Matrix mit Finder-Muster');
+ok(count(qr_matrix(str_repeat('x', 213))) === 57 && throws(fn() => qr_matrix(str_repeat('x', 214))), 'QR bis Version 10, längere Daten abgelehnt');
+ok(str_starts_with(qr_svg_data_uri('test'), 'data:image/svg+xml;base64,'), 'QR als SVG-Daten-URI');
 
 /* --- Throttle --- */
 for ($i = 0; $i < 5; $i++) {

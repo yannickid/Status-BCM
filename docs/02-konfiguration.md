@@ -5,8 +5,15 @@ Status-BCM hat drei Konfigurationsdateien:
 | Datei | Inhalt | Im Git? |
 |---|---|---|
 | `config.inc.php` | alle Einstellungen mit Platzhaltern und Kommentaren | ja, **nicht bearbeiten** |
-| `config.local.inc.php` | echte Werte und Geheimnisse; überschreibt `config.inc.php` | **nein** (`.gitignore`) |
+| `config.local.inc.php` | echte Werte und Geheimnisse; überschreibt `config.inc.php`. Wird vom Einrichtungsassistenten erzeugt | **nein** (`.gitignore`) |
 | `config.json` | Status-Katalog, Standorte, Mail-Vorlagen, kritische Begriffe | ja |
+
+Dazu kommen die Einstellungen, die Admins im Browser unter **System** pflegen: Zugangspasswort Stufe 1,
+ALARM-Empfänger und Kopie-Adresse. Sie liegen verschlüsselt in der Datenbank und haben Vorrang vor
+`auth.stage1_hash` und `mail.cc_default_mail1`; Empfänger aus der Datei gelten zusätzlich.
+
+Zum Bearbeiten von `config.local.inc.php` (z. B. neues SMTP-Passwort): per FTP herunterladen, im Texteditor ändern,
+wieder hochladen. Vorher eine Kopie sichern.
 
 ## config.local.inc.php – wichtige Schlüssel
 
@@ -19,8 +26,8 @@ Status-BCM hat drei Konfigurationsdateien:
 | `db.dsn`, `db.user`, `db.pass`, `db.prefix` | – / `sbcm_` | Datenbankzugang |
 | `mail.transport` | `smtp` | `log` schreibt Mails nur nach `storage/outbox` (zum Testen) |
 | `mail.host`, `port`, `secure`, `user`, `pass` | 587 / `starttls` | SMTP; `secure` = `starttls`, `ssl` oder `none` (nur localhost) |
-| `mail.cc_default_mail1` | – | Kopie von Erinnerungen, Alarm-Mails und täglichem Audit-Anker (`setup.php set-cc1`) |
-| `mail.recipients` | `[]` | ALARM-Empfänger, verschlüsselt (`setup.php add-recipient`) |
+| `mail.cc_default_mail1` | – | Kopie von Erinnerungen, Alarm-Mails und täglichem Audit-Anker. Besser unter **System** pflegen |
+| `mail.recipients` | `[]` | ALARM-Empfänger. Besser unter **System** pflegen |
 | `auth.max_failures` / `max_failures_user` / `window_seconds` | 5 / 10 / 900 | Brute-Force-Sperre je IP / je Benutzer |
 | `auth.idle_minutes` / `stage2_idle_minutes` / `absolute_hours` | 30 / 15 / 10 | Sitzungsdauer |
 | `auth.totp_enforce_all` | `false` | `true` = TOTP bei **jeder** Änderung, auch beim Beenden |
@@ -35,7 +42,7 @@ Status-BCM hat drei Konfigurationsdateien:
 | `limits.max_validity_days` | 30 | höchste Gültigkeitsdauer eines Status |
 | `net.trusted_proxies` | `[]` | nur hinter einem Reverse-Proxy setzen |
 
-Geheimnisse können überall als `enc:v1:…` stehen: `php setup.php encrypt-value '<wert>'`.
+Geheimnisse können überall als `enc:v1:…` stehen (erzeugt mit `php setup.php encrypt-value '<wert>'`, optional).
 
 ## config.json – Status-Katalog
 
@@ -79,7 +86,7 @@ gesetzt.
 * Übungen immer kennzeichnen (`"exercise": true`).
 * `forbidden_terms` ergänzen, wenn Begriffe in Ihrer Organisation heikel sind. Ein Status mit einem solchen Begriff
   lässt sich nicht setzen.
-* Jede Textänderung per Pull Request, danach `php setup.php check`.
+* Jede Textänderung per Pull Request, nach dem Upload **System → Prüfung** ansehen.
 
 ### Warum der Katalog in einer Datei liegt und nicht in der Datenbank
 

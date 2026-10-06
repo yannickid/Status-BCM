@@ -46,7 +46,8 @@ Meldungstexte pressetauglich, schlanker Betrieb ohne Abhängigkeiten.
 ```mermaid
 flowchart LR
   B[Beschäftigte<br>Smartphone/PC] -- HTTPS, Stufe 1 --> W[Webspace<br>index.php / status.php]
-  R[Redaktion/Admin] -- HTTPS, Stufe 2 + TOTP --> C[change.php / admin.php]
+  R[Redaktion/Admin] -- HTTPS, Stufe 2 + TOTP --> C[change.php / admin.php / system.php]
+  I[Ersteinrichtung<br>install.php + Code aus storage/] -. einmalig .-> L
   W --> L[lib.inc.php]
   C --> L
   L -- PDO --> D[(MySQL/MariaDB<br>verschlüsselte Nutzdaten,<br>Audit-Hash-Kette)]
@@ -57,7 +58,8 @@ flowchart LR
 ```
 
 **Vertrauensgrenzen:** Browser ↔ Webspace (HTTPS), Webspace ↔ Datenbank, Webspace ↔ Mailserver. Die Schlüssel liegen
-in einer Datei (`config.local.inc.php`), nicht in der Datenbank. Wer nur die Datenbank kontrolliert, kann deshalb
+in einer Datei (`config.local.inc.php`), nicht in der Datenbank. Im Browser gepflegte Einstellungen (Zugangspasswort,
+Empfänger, Kopie-Adresse) liegen zwar in der Datenbank, aber mit AES-GCM verschlüsselt und an ihren Namen gebunden. Wer nur die Datenbank kontrolliert, kann deshalb
 nichts unbemerkt fälschen (Abschnitt 5.4).
 
 ## 4. Rollen und Berechtigungen
@@ -66,8 +68,8 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 |---|---|---|
 | Beschäftigte | Stufe 1: gemeinsames Zugangspasswort | Aktuellen Status lesen |
 | Redaktion (`editor`) | Stufe 1 + Stufe 2 (persönlich) | Status setzen, verlängern, beenden; ALARM-Mail auslösen (mit TOTP); Verlauf, Protokoll und Nutzung einsehen; eigenes Passwort ändern |
-| Admin (`admin`) | wie Redaktion | zusätzlich Benutzerverwaltung (`admin.php`): anlegen, Passwort/TOTP zurücksetzen, Rolle ändern, (de)aktivieren, jeweils mit TOTP |
-| Betrieb (Shell/FTP) | Zugang zum Webspace | `setup.php` (Schlüssel, Stufe-1-Passwort, Empfänger, Notfall-Reset), `config.json` pflegen |
+| Admin (`admin`) | wie Redaktion | zusätzlich Benutzerverwaltung (`admin.php`): anlegen, Passwort/TOTP zurücksetzen, Rolle ändern, (de)aktivieren; System (`system.php`): Zugangspasswort Stufe 1, ALARM-Empfänger, Kopie-Adresse; Änderungen jeweils mit TOTP; Prüfung, Cron-Adresse, Testmail |
+| Betrieb (FTP, optional Shell) | Zugang zum Webspace | Ersteinrichtung (`install.php` mit Einrichtungscode aus `storage/`), `config.json` und `config.local.inc.php` pflegen, Sicherung; optional `setup.php` |
 
 * **Need-to-know:** Empfängeradressen sieht niemand in der Oberfläche, nur die Anzahl bzw. maskiert (`m****@e***.de`).
 * **Vier-Augen-Prinzip:** Die Software erzwingt kein Vier-Augen-Prinzip beim Setzen eines Status, weil das im
@@ -103,7 +105,7 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 | Änderungsablauf | Formular → **Vorschau** (genau so, wie alle es sehen) → **Verbindlich setzen**. Die Vorschau verfällt nach 5 Min. |
 | HTTP-Header | strenge CSP (`default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'`), kein JavaScript; HSTS; `X-Frame-Options: DENY`; `nosniff`; `Referrer-Policy: no-referrer`; `no-store`. |
 | Suchmaschinen | `X-Robots-Tag` und Meta `noindex, nofollow, noarchive`; `robots.txt` sperrt alles; vor dem Login keine Inhalte. |
-| Dateischutz | `.htaccess` sperrt Konfiguration, Bibliothek, `config.json`, `setup.php`, versteckte Dateien, `tests/`, `docs/` und `storage/`. Alle `*.inc.php` geben bei direktem Aufruf zusätzlich 403 zurück. `setup.php` läuft nur per CLI. |
+| Dateischutz | `.htaccess` sperrt Konfiguration, Bibliothek, `config.json`, `setup.php`, versteckte Dateien, `tests/`, `docs/` und `storage/`. Alle `*.inc.php` geben bei direktem Aufruf zusätzlich 403 zurück. `setup.php` läuft nur per CLI. `install.php` verlangt einen Einrichtungscode aus einer Datei in `storage/` (nur mit Dateizugriff lesbar, max. 10 Fehlversuche je 15 Min.) und sperrt sich nach der Einrichtung dauerhaft. |
 | Fehlerbehandlung | keine Fehlermeldungen im Browser (`display_errors=0`), Details nur im Server-Log. |
 | Abhängigkeiten | keine Laufzeit-Bibliotheken, kein Composer. Einzige Fremdkomponente ist Bootstrap 5.3.8 (nur CSS, lokal, Prüfsumme gegen das npm-Paket verifiziert). |
 
@@ -120,9 +122,12 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 
 **Was verschlüsselt gespeichert wird:** Meldungstexte und Standortdaten jedes Status, Mail-Inhalte und
 Zustellergebnisse, Audit-Details (vorher/nachher, IP, Browser), E-Mail-Adressen und TOTP-Secrets der Benutzer,
-ALARM-Empfänger und `cc_default_mail1` (in der Konfiguration).
+ALARM-Empfänger, `cc_default_mail1` und der Hash des Zugangspassworts Stufe 1 (Tabelle `kv`, Kontext je Einstellung,
+damit Werte nicht vertauscht werden können; ältere Werte aus `config.local.inc.php` ebenfalls verschlüsselt).
+Der QR-Code für die Authenticator-App wird auf dem Server erzeugt (`qr.inc.php`); das TOTP-Secret geht an keinen fremden
+Dienst.
 
-**Schlüsselmanagement:** Der Master-Key wird mit `php setup.php init` aus `random_bytes` erzeugt und liegt nur in
+**Schlüsselmanagement:** Der Master-Key wird vom Einrichtungsassistenten (bzw. `php setup.php init`) aus `random_bytes` erzeugt und liegt nur in
 `config.local.inc.php` (Rechte 0600, nicht im Git). *Betreiber:* Die Datei getrennt und offline sichern
 (z. B. im Tresor oder Passwortmanager der Notfallorganisation). Ohne den Key sind gespeicherte Status und Protokolle
 nicht mehr lesbar. Ein Schlüsselwechsel ist nur bei einer Neuinstallation vorgesehen (`init --force`).
@@ -138,6 +143,7 @@ nicht mehr lesbar. Ein Schlüsselwechsel ist nur bei einer Neuinstallation vorge
 | Status gesetzt / verlängert / beendet / automatisch zurückgesetzt | `status.set`, `status.extend`, `status.end`, `status.auto_end` (vorher → nachher, Standorte, Gültigkeit, ALARM ja/nein, TOTP ja/nein, interne Notiz) |
 | Mails | `mail.alarm`, `mail.reminder`, `mail.autorevert`, `mail.pw_reminder`, `mail.anchor` (nur Anzahl erfolgreich/fehlgeschlagen) |
 | Benutzerverwaltung | `user.create`, `user.reset_pw`, `user.set_pw`, `user.reset_totp`, `user.set_totp`, `user.role`, `user.disable`, `user.enable` |
+| Einrichtung und System | `system.install`, `setting.stage1`, `setting.cc1`, `setting.recipient_add`, `setting.recipient_remove` (nur maskierte Adressen), `system.cron_manual`, `mail.test` |
 
 Jeder Eintrag enthält Zeitstempel (UTC), Akteur, Stufe (0 = System, 1, 2), Aktion und Objekt. Die verschlüsselten
 Details enthalten außerdem IP-Adresse, Browser und Skript bzw. bei CLI den Systembenutzer.
@@ -157,16 +163,16 @@ Details enthalten außerdem IP-Adresse, Browser und Skript bzw. bei CLI den Syst
    letzten Statuseintrag im Protokoll übereinstimmen, sonst zeigt die Statusseite "konnte nicht verifiziert werden".
    Ein Benutzer mit verändertem MAC wird nicht mehr zur Anmeldung zugelassen.
 
-**Prüfen:** `php setup.php verify-audit` oder in `change.php` unter "Änderungsprotokoll". Beide prüfen die gesamte
-Kette.
+**Prüfen:** im Browser unter **System → Prüfung** oder **Einstellungen → Änderungsprotokoll**, per Kommandozeile
+`php setup.php verify-audit`. Alle prüfen die gesamte Kette.
 
 **Aufbewahrung:** Die Protokolle werden unbegrenzt aufbewahrt (append-only). *Betreiber:* Frist im Löschkonzept
 festlegen (Abschnitt 7). Eine Löschung ist nur durch die Datenbankadministration möglich und muss dokumentiert werden.
 
 ### 5.5 Schutz der Empfängeradressen
 
-* Die Adressen liegen verschlüsselt in `config.local.inc.php` (`php setup.php add-recipient`), nicht in der
-  Datenbank und nicht im Git.
+* Die Adressen werden unter **System** gepflegt (Änderung nur mit TOTP, protokolliert) und liegen verschlüsselt in der
+  Datenbank. Ältere Einträge in `config.local.inc.php` gelten zusätzlich. Nichts davon steht im Git.
 * Der Versand erfolgt **ausschließlich per BCC** (`To: undisclosed-recipients:;`), in Paketen zu max. 50 Adressen.
 * In Oberfläche und Protokoll erscheinen nur die Anzahl bzw. maskierte Adressen.
 
@@ -174,7 +180,7 @@ festlegen (Abschnitt 7). Eine Löschung ist nur durch die Datenbankadministratio
 
 * Es gibt nur freigegebene Textbausteine aus `config.json`, keinen Freitext.
 * `forbidden_terms` (z. B. "Angriff", "Ausfall", "Störung", "Täter") wird für Status, Standorte und Mail-Vorlagen
-  geprüft (`setup.php check`, Hinweis in `change.php`). Ein Status mit kritischem Begriff **lässt sich nicht setzen**.
+  geprüft (System → Prüfung, Hinweis in `change.php`). Ein Status mit kritischem Begriff **lässt sich nicht setzen**.
 * Übungen werden in Seite und Mail ausdrücklich als **ÜBUNG** gekennzeichnet.
 * Die Texte nennen Auswirkung und Ausweichweg, nie Ursache oder Umfang.
 * Die Seite wird so behandelt, als wäre sie öffentlich.
@@ -185,7 +191,7 @@ festlegen (Abschnitt 7). Eine Löschung ist nur durch die Datenbankadministratio
 * Sie ist schlank: etwa 3 KB HTML je Aufruf; das CSS (etwa 31 KB komprimiert) wird ein Jahr gecacht. Sie funktioniert
   ohne JavaScript und auch bei schlechter Mobilfunkverbindung.
 * Ein abgelaufenes Passwort sperrt niemanden aus. Für den Fall, dass der letzte Admin ausgesperrt ist, gibt es einen
-  Notfall-Reset per CLI (`php setup.php reset-password <id>`).
+  zweiten Admin (Empfehlung) oder den Notfallweg in [Betrieb](04-betrieb.md#notfälle-im-betrieb).
 * *Betreiber:* Rückfallweg ohne die Seite festlegen, die Erreichbarkeit überwachen (z. B. externer Uptime-Check auf
   `index.php`) und die Seite in Notfallübungen nutzen.
 
@@ -193,20 +199,20 @@ festlegen (Abschnitt 7). Eine Löschung ist nur durch die Datenbankadministratio
 
 | Was | Wie | Hinweis |
 |---|---|---|
-| `config.local.inc.php` | getrennt, verschlüsselt, offline | enthält Master-Key, Hashes und Empfänger |
+| `config.local.inc.php` | getrennt, verschlüsselt, offline | enthält Master-Key, Datenbank- und SMTP-Zugang |
 | Datenbank | täglicher Dump (`mysqldump --single-transaction`) über den Hoster | ohne Master-Key nutzlos, daher getrennt aufbewahren |
 | Code und `config.json` | Git-Repository | Änderungen nachvollziehbar |
 
-*Wiederherstellung testen:* Dump in eine Test-DB einspielen, `php setup.php verify-audit` muss "OK" melden, der
+*Wiederherstellung testen:* Dump in eine Test-DB einspielen, die Prüfung unter System (bzw. `php setup.php verify-audit`) muss "intakt" melden, der
 Kopf-Hash muss zum letzten Audit-Anker passen.
 
 ### 5.9 Änderungsmanagement (Bezug: OPS.1.1.3 Patch- und Änderungsmanagement)
 
 * Code und Meldungstexte werden in Git versioniert, Änderungen per Pull Request mit Review.
-* Vor jedem Upload laufen `php tests/selftest.php` und `php tests/webtest.php`, danach auf dem Server
-  `php setup.php check`.
+* Vor jedem Upload laufen `php tests/selftest.php`, `php tests/webtest.php` und `php tests/installtest.php`, danach
+  auf dem Server **System → Prüfung**.
 * `config.json` wird schreibgeschützt hochgeladen (`chmod 0444`), idealerweise außerhalb des Webroots.
-  `setup.php check` warnt, wenn PHP die Datei beschreiben darf.
+  Die Prüfung warnt, wenn PHP die Datei beschreiben darf.
 * *Betreiber:* PHP-Version des Hosters aktuell halten (mind. 8.0, empfohlen eine unterstützte 8.x).
 
 ### 5.10 Outsourcing / Hosting (Bezug: OPS.2.3 Nutzung von Outsourcing)
@@ -246,20 +252,23 @@ gegebenenfalls den Personal- bzw. Betriebsrat beteiligen.
 | DB-Benutzer ohne TRIGGER-Recht | Die Hash-Kette und der Anker erkennen Manipulation trotzdem, verhindern sie aber nicht. |
 | Mailzustellung (Spam, Ausfall) | Das Zustellergebnis wird protokolliert, Fehler werden sofort angezeigt. ALARM-Mail ist ein Zusatzkanal, kein alleiniger. |
 | Zeitabweichung des Servers | TOTP toleriert ±30 s. *Betreiber:* NTP beim Hoster sicherstellen. |
+| Einrichtungsassistent vor der Einrichtung erreichbar | Ohne den Code aus `storage/` nutzlos. *Betreiber:* Einrichtung direkt nach dem Upload abschließen, danach `install.php` löschen. |
+| Datenbank-Angreifer löscht Browser-Einstellungen | Fälschen ist nicht möglich, Löschen schon: dann gelten die Werte aus `config.local.inc.php`. Die Prüfung meldet fehlende Empfänger, jede Änderung steht im Protokoll. |
+| Cron-Adresse wird bekannt | Erlaubt nur, Erinnerungen und Aufräumen auszulösen (gedrosselt). Optional `cron.ip_allowlist`; Token durch neuen Wert in `config.local.inc.php` ersetzen. |
 
 ## 9. Prüfanleitung für Auditoren
 
-1. **Konfiguration:** `php setup.php check` ausführen; alle Punkte sollen `[ok]` zeigen.
-2. **Protokollintegrität:** `php setup.php verify-audit`. Den Kopf-Hash mit dem letzten Audit-Anker vergleichen
+1. **Konfiguration:** **System → Prüfung** (oder `php setup.php check`); alle Punkte sollen "ok" zeigen.
+2. **Protokollintegrität:** Zeile "Protokoll-Kette" in der Prüfung (oder `php setup.php verify-audit`). Den Kopf-Hash mit dem letzten Audit-Anker vergleichen
    (Mail an `cc_default_mail1`). Die Zahl der Einträge darf nicht kleiner sein als im Anker.
-3. **Benutzer:** `php setup.php list-users`. Erwartet werden Rollen, Passwortalter, Gültigkeit, gekoppelte TOTP und
+3. **Benutzer:** Seite **Benutzer** (oder `php setup.php list-users`). Erwartet werden Rollen, Passwortalter, Gültigkeit, gekoppelte TOTP und
    keine "INTEGRITÄTSFEHLER".
 4. **Änderungsnachweis:** In `change.php` → "Änderungsprotokoll" einen Statuswechsel nachvollziehen: wer, wann,
    vorher → nachher, TOTP ja/nein, IP.
-5. **Automatische Tests:** `php tests/selftest.php` und `php tests/webtest.php` (u. a. Manipulationserkennung,
+5. **Automatische Tests:** `php tests/selftest.php`, `php tests/webtest.php` und `php tests/installtest.php` (u. a. Manipulationserkennung,
    Replay-Schutz, BCC, CSRF, Brute-Force, Rollen).
 6. **Header:** `curl -sI https://<host>/index.php` → CSP, HSTS, `X-Robots-Tag`, `X-Frame-Options`.
-7. **Dateischutz:** `https://<host>/config.json`, `/lib.inc.php`, `/setup.php`, `/docs/`, `/tests/` dürfen keine
+7. **Dateischutz:** `https://<host>/config.json`, `/lib.inc.php`, `/setup.php`, `/storage/`, `/docs/`, `/tests/` dürfen keine
    Inhalte liefern.
 8. **Texte:** `config.json` im Git-Verlauf prüfen: Wer hat welchen Meldungstext wann freigegeben?
 

@@ -10,7 +10,7 @@ if (!defined('SBCM')) {
     exit;
 }
 
-const SBCM_VERSION = '1.1.0';
+const SBCM_VERSION = '1.2.0';
 define('SBCM_ZERO', str_repeat('0', 64));
 
 /* ====================================================================== */
@@ -315,7 +315,7 @@ function master_key(): string
     }
     $bin = base64_decode((string)cfg('security.master_key', ''), true);
     if ($bin === false || strlen($bin) !== 32) {
-        throw new RuntimeException('security.master_key fehlt/ungültig – "php setup.php init" ausführen');
+        throw new RuntimeException('security.master_key fehlt/ungültig – Einrichtung über install.php (oder "php setup.php init")');
     }
     return $k = $bin;
 }
@@ -590,6 +590,204 @@ function kv_set(string $k, string $v): void
     $q->execute([$k]);
     $q = db()->prepare('INSERT INTO ' . t('kv') . ' (k, v) VALUES (?, ?)');
     $q->execute([$k, $v]);
+}
+
+/* ====================================================================== */
+/* Im Browser gepflegte Einstellungen                                     */
+/* ====================================================================== */
+
+/*
+ * Werte, die Admins ohne Kommandozeile ändern (Zugangspasswort Stufe 1, ALARM-Empfänger, cc_default_mail1), liegen
+ * in der Tabelle kv, verschlüsselt mit AES-256-GCM und dem Schlüsselnamen als Kontext. Wer nur die Datenbank
+ * kontrolliert, kann sie weder lesen noch fälschen oder zwischen Schlüsseln vertauschen. Werte aus
+ * config.local.inc.php gelten weiter als Rückfall (Empfänger: zusätzlich).
+ */
+function setting_get(string $k, bool $reload = false)
+{
+    static $cache = [];
+    if ($reload) {
+        $cache = [];
+        return null;
+    }
+    if (array_key_exists($k, $cache)) {
+        return $cache[$k];
+    }
+    try {
+        $raw = kv_get('set:' . $k);
+    } catch (Throwable $e) {
+        return null; // Datenbank (noch) nicht erreichbar: Rückfall auf die Konfigurationsdatei
+    }
+    if ($raw === null) {
+        return $cache[$k] = null;
+    }
+    try {
+        $v = json_decode(dec($raw, 'setting:' . $k, 'settings'), true, 16, JSON_THROW_ON_ERROR);
+    } catch (Throwable $e) {
+        error_log('Status-BCM: Einstellung ' . $k . ' nicht lesbar (Integritätsfehler?)');
+        $v = null;
+    }
+    return $cache[$k] = $v;
+}
+
+function setting_set(string $k, $v): void
+{
+    kv_set('set:' . $k, enc(json_enc($v), 'setting:' . $k, 'settings'));
+    setting_get($k, true);
+}
+
+/** Einstellung, deren Eintrag in kv vorhanden, aber nicht entschlüsselbar ist (Manipulation, falscher Master-Key). */
+function setting_broken(string $k): bool
+{
+    try {
+        $raw = kv_get('set:' . $k);
+        if ($raw === null) {
+            return false;
+        }
+        dec($raw, 'setting:' . $k, 'settings');
+        return false;
+    } catch (Throwable $e) {
+        return true;
+    }
+}
+
+function stage1_hash(): string
+{
+    $s = setting_get('stage1');
+    return is_array($s) && !empty($s['hash']) ? (string)$s['hash'] : (string)cfg('auth.stage1_hash', '');
+}
+
+function stage1_set_at(): string
+{
+    $s = setting_get('stage1');
+    return is_array($s) && !empty($s['hash']) ? (string)($s['set_at'] ?? '') : (string)cfg('auth.stage1_set_at', '');
+}
+
+/** Zugangspasswort Stufe 1 setzen (Browser oder CLI). Rückgabe: Fehlerliste. */
+function stage1_change(string $pw, string $pw2, string $actor, array $how = []): array
+{
+    $e = [];
+    if (mb_strlen($pw) < 10 || strlen($pw) > 1000) {
+        $e[] = 'Das Zugangspasswort muss mindestens 10 Zeichen lang sein.';
+    }
+    if (!hash_equals($pw, $pw2)) {
+        $e[] = 'Die Eingaben stimmen nicht überein.';
+    }
+    if (!$e && password_verify($pw, stage1_hash())) {
+        $e[] = 'Das neue Zugangspasswort muss sich vom bisherigen unterscheiden.';
+    }
+    if ($e) {
+        return $e;
+    }
+    tx(function () use ($pw, $actor, $how) {
+        setting_set('stage1', ['hash' => password_hash($pw, PASSWORD_DEFAULT), 'set_at' => now_utc()]);
+        kv_set('stage1_reminder_ts', '0');
+        audit('setting.stage1', 'stage1', ['how' => $how], $actor, str_starts_with($actor, 'system:') ? 0 : 2);
+    });
+    return [];
+}
+
+/** ALARM-Empfänger aus dem Browser (Liste im Klartext, als Ganzes verschlüsselt gespeichert). */
+function recipients_web(): array
+{
+    $v = setting_get('recipients');
+    return is_array($v) ? array_values(array_filter(array_map('strval', $v), fn($e) => filter_var($e, FILTER_VALIDATE_EMAIL))) : [];
+}
+
+/** Empfänger hinzufügen (mehrere durch Zeilenumbruch, Komma oder Semikolon getrennt). Rückgabe: [neu, Fehler] */
+function recipients_add(string $text, string $actor, array $how = []): array
+{
+    $new = [];
+    $bad = [];
+    foreach (preg_split('/[\s,;]+/', strtolower($text), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $m) {
+        filter_var($m, FILTER_VALIDATE_EMAIL) ? $new[$m] = $m : $bad[] = $m;
+    }
+    if ($bad || !$new) {
+        return [0, $bad ? 'Ungültige Adresse(n): ' . implode(', ', array_map('mask_email', $bad)) : 'Bitte mindestens eine Adresse angeben.'];
+    }
+    return tx(function () use ($new, $actor, $how) {
+        $cur = recipients_web();
+        $add = array_values(array_diff(array_values($new), $cur, alarm_recipients()));
+        if ($add) {
+            setting_set('recipients', array_merge($cur, $add));
+            audit('setting.recipient_add', 'recipients', ['count' => count($add), 'masked' => array_map('mask_email', $add), 'how' => $how],
+                $actor, str_starts_with($actor, 'system:') ? 0 : 2);
+        }
+        return [count($add), null];
+    });
+}
+
+function recipients_remove(int $index, string $actor, array $how = []): bool
+{
+    return tx(function () use ($index, $actor, $how) {
+        $cur = recipients_web();
+        if (!isset($cur[$index])) {
+            return false;
+        }
+        $gone = $cur[$index];
+        array_splice($cur, $index, 1);
+        setting_set('recipients', $cur);
+        audit('setting.recipient_remove', 'recipients', ['masked' => [mask_email($gone)], 'how' => $how], $actor, str_starts_with($actor, 'system:') ? 0 : 2);
+        return true;
+    });
+}
+
+function cc1_change(string $mail, string $actor, array $how = []): ?string
+{
+    $mail = strtolower(trim($mail));
+    if (!filter_var($mail, FILTER_VALIDATE_EMAIL)) {
+        return 'Bitte eine gültige E-Mail-Adresse angeben.';
+    }
+    tx(function () use ($mail, $actor, $how) {
+        $before = cc_default_mail1();
+        setting_set('cc1', $mail);
+        audit('setting.cc1', 'cc1', ['masked' => [mask_email($mail)], 'before' => $before !== '' ? mask_email($before) : '–', 'how' => $how],
+            $actor, str_starts_with($actor, 'system:') ? 0 : 2);
+    });
+    return null;
+}
+
+/* ====================================================================== */
+/* config.local.inc.php (Installer, CLI)                                  */
+/* ====================================================================== */
+
+function local_config_path(): string
+{
+    return getenv('SBCM_LOCAL_CONFIG') ?: (__DIR__ . '/config.local.inc.php');
+}
+
+function local_config_load(): array
+{
+    $p = local_config_path();
+    if (!is_file($p)) {
+        return [];
+    }
+    $a = require $p;
+    return is_array($a) ? $a : [];
+}
+
+function local_config_code(array $a): string
+{
+    return "<?php\n// Status-BCM – lokale Konfiguration mit Geheimnissen (Master-Key!). NICHT committen, separat sichern, Rechte 0600.\n"
+        . "if (!defined('SBCM')) { http_response_code(403); exit; }\nreturn " . var_export($a, true) . ";\n";
+}
+
+/** Schreibt config.local.inc.php atomar. false = Verzeichnis/Datei nicht beschreibbar (dann Download anbieten). */
+function local_config_write(array $a): bool
+{
+    $p = local_config_path();
+    $tmp = $p . '.tmp';
+    if (@file_put_contents($tmp, local_config_code($a), LOCK_EX) === false) {
+        return false;
+    }
+    @chmod($tmp, 0600);
+    if (!@rename($tmp, $p)) {
+        @unlink($tmp);
+        return false;
+    }
+    if (function_exists('opcache_invalidate')) {
+        @opcache_invalidate($p, true);
+    }
+    return true;
 }
 
 /* ====================================================================== */
@@ -1056,7 +1254,7 @@ function logout_all(): void
 
 function verify_stage1(string $pw): bool
 {
-    $hash = (string)cfg('auth.stage1_hash', '');
+    $hash = stage1_hash();
     if ($hash === '' || strlen($pw) > 1000) {
         password_verify('x', password_hash('dummy', PASSWORD_DEFAULT));
         return false;
@@ -1280,6 +1478,10 @@ function audit_describe(string $action, array $d): string
         'user.create' => 'Benutzer angelegt', 'user.reset_pw' => 'Passwort zurückgesetzt (Einmalpasswort)',
         'user.set_pw' => 'Passwort geändert', 'user.reset_totp' => 'TOTP zurückgesetzt', 'user.set_totp' => 'TOTP gekoppelt',
         'user.disable' => 'Benutzer deaktiviert', 'user.enable' => 'Benutzer aktiviert', 'user.role' => 'Rolle geändert',
+        'system.install' => 'Einrichtung abgeschlossen (install.php)', 'system.cron_manual' => 'Cron manuell ausgeführt',
+        'setting.stage1' => 'Zugangspasswort Stufe 1 geändert', 'setting.cc1' => 'Kopie-Adresse (cc_default_mail1) geändert',
+        'setting.recipient_add' => 'ALARM-Empfänger hinzugefügt', 'setting.recipient_remove' => 'ALARM-Empfänger entfernt',
+        'mail.test' => 'Testmail versendet',
     ];
     $s = $labels[$action] ?? $action;
     $parts = [];
@@ -1293,16 +1495,22 @@ function audit_describe(string $action, array $d): string
         }
         $parts[] = 'ALARM-Mail: ' . (!empty($d['after']['alarm_mail']) ? 'ja' : 'nein');
     }
+    if (!empty($d['how']['emergency'])) {
+        $parts[] = 'Notfallzugang (storage/notfall.txt)';
+    }
     if (isset($d['how']['totp'])) {
         $parts[] = 'TOTP: ' . ($d['how']['totp'] ? 'ja' : 'nein');
     }
     if (isset($d['role'])) {
         $parts[] = 'Rolle: ' . (isset($d['role_before']) ? $d['role_before'] . ' → ' : '') . $d['role'];
     }
-    foreach (['recipients', 'ok', 'failed', 'status_id', 'state'] as $f) {
+    foreach (['recipients', 'ok', 'failed', 'status_id', 'state', 'count'] as $f) {
         if (isset($d[$f]) && is_scalar($d[$f])) {
             $parts[] = "$f: " . $d[$f];
         }
+    }
+    if (!empty($d['masked']) && is_array($d['masked'])) {
+        $parts[] = 'Adresse: ' . implode(', ', array_map('strval', $d['masked']));
     }
     if (!empty($d['note'])) {
         $parts[] = 'Notiz: ' . $d['note'];
@@ -1625,9 +1833,13 @@ function login_stats(int $days = 30, ?int $nowTs = null): array
 /* E-Mail (eigener SMTP-Client, keine Abhängigkeiten)                     */
 /* ====================================================================== */
 
+/** ALARM-Empfänger: aus config.local.inc.php (CLI) und aus dem Browser (System-Seite), ohne Doppelte. */
 function alarm_recipients(): array
 {
     $out = [];
+    foreach (recipients_web() as $e) {
+        $out[$e] = $e;
+    }
     foreach ((array)cfg('mail.recipients', []) as $r) {
         try {
             $e = strtolower(trim(cfg_secret((string)$r)));
@@ -1645,6 +1857,10 @@ function alarm_recipients(): array
 /** cc_default_mail1 – darf wie die Empfänger als "enc:..." hinterlegt sein. */
 function cc_default_mail1(): string
 {
+    $web = setting_get('cc1');
+    if (is_string($web) && filter_var($web, FILTER_VALIDATE_EMAIL)) {
+        return $web;
+    }
     try {
         $e = strtolower(trim(cfg_secret((string)cfg('mail.cc_default_mail1', ''))));
     } catch (Throwable $ex) {
@@ -2042,6 +2258,8 @@ function run_cron(?int $nowTs = null): array
         $log[] = "Erinnerung für Status #{$r['id']} ($label): {$sum['ok']}/{$sum['total']} zugestellt";
     }
 
+    kv_set('cron_last', (string)$now);
+
     // Passwort-Gültigkeit (Stufe 2 je Benutzer, Stufe 1 gemeinsam): Erinnerung vor/nach Ablauf
     $log = array_merge($log, password_reminders($now));
 
@@ -2101,7 +2319,7 @@ function password_reminders(int $now): array
     }
     users(false, true);
 
-    $set = (string)cfg('auth.stage1_set_at', '');
+    $set = stage1_set_at();
     $max = (int)cfg('auth.stage1_max_age_days', 0);
     if ($set !== '' && $max > 0 && $cc1 !== '') {
         $due = utc_ts($set) + $max * 86400;
@@ -2109,7 +2327,7 @@ function password_reminders(int $now): array
         if ($now >= $due - (int)cfg('auth.password_remind_days', 14) * 86400 && $now - $last >= $repeat) {
             $vars = ['name' => 'Verantwortliche', 'what' => 'Das gemeinsame Zugangspasswort (Stufe 1)',
                 'phrase' => ($now >= $due ? 'sollte seit ' : 'sollte bis ') . fmt_local(gmdate('Y-m-d H:i:s', $due))
-                    . ' Uhr gewechselt werden (php setup.php set-stage1)', 'url' => $url];
+                    . ' Uhr gewechselt werden (Menü System → Zugangspasswort)', 'url' => $url];
             $subject = trim(render_tpl($tpl['subject'], $vars));
             $body = render_tpl($tpl['body'], $vars);
             $sum = mail_record('pw_reminder', null, $subject, $body, mail_deliver(['to' => [$cc1], 'subject' => $subject, 'body' => $body]));
@@ -2119,6 +2337,122 @@ function password_reminders(int $now): array
         }
     }
     return $log;
+}
+
+/* ====================================================================== */
+/* Systemprüfung (System-Seite und `php setup.php check`)                 */
+/* ====================================================================== */
+
+/** Liste von [ok, Meldung]. */
+function system_check(): array
+{
+    $r = [];
+    $chk = function (bool $ok, string $msg) use (&$r): void {
+        $r[] = [$ok, $msg];
+    };
+    $keyOk = false;
+    try {
+        master_key();
+        $keyOk = true;
+        $chk(true, 'Master-Key vorhanden');
+    } catch (Throwable $e) {
+        $chk(false, $e->getMessage());
+    }
+    $dbOk = false;
+    try {
+        db();
+        $dbOk = true;
+        $chk(true, 'Datenbank erreichbar, Tabellen vorhanden');
+    } catch (Throwable $e) {
+        $chk(false, 'Datenbank nicht erreichbar: ' . $e->getMessage());
+    }
+    $chk(stage1_hash() !== '', 'Zugangspasswort Stufe 1 gesetzt');
+    $chk(stage1_set_at() !== '', 'Datum des Zugangspassworts bekannt (sonst einmal neu setzen)');
+    $chk($dbOk && count(array_filter(users(), fn($u) => $u['role'] === 'admin')) > 0, 'Mindestens ein aktiver Admin');
+    foreach ($dbOk ? users(true) : [] as $id => $u) {
+        if (!$u['mac_ok']) {
+            $chk(false, "Benutzer $id: Integritätsfehler (Zeile in der Datenbank verändert?)");
+        }
+    }
+    foreach ($dbOk ? users() : [] as $id => $u) {
+        if ($u['totp_secret'] === '') {
+            $chk(false, "Benutzer $id: Authenticator-App noch nicht gekoppelt (passiert beim ersten Login)");
+        }
+    }
+    foreach ($dbOk && $keyOk ? ['stage1', 'recipients', 'cc1'] : [] as $k) {
+        if (setting_broken($k)) {
+            $chk(false, "Einstellung $k nicht lesbar – Datenbank verändert oder falscher Master-Key");
+        }
+    }
+    $base = (string)cfg('app.base_url');
+    $chk(!str_contains($base, 'example.invalid'), 'Adresse der Seite (app.base_url) gesetzt');
+    $chk(str_starts_with($base, 'https://'), 'Adresse der Seite nutzt HTTPS');
+    $n = $keyOk ? count(alarm_recipients()) : 0;
+    $chk($n > 0, 'ALARM-Empfänger vorhanden (' . $n . ')');
+    $cc1 = $keyOk ? cc_default_mail1() : '';
+    $chk($cc1 !== '' && !str_contains($cc1, 'example.invalid'), 'Kopie-Adresse (cc_default_mail1) gesetzt');
+    $chk((string)cfg('mail.transport') === 'smtp', 'Mailversand per SMTP (nicht nur Testmodus "log")');
+    $chk((string)cfg('cron.token', '') !== '', 'Cron-Token gesetzt (für den Aufruf per URL)');
+    $last = $dbOk ? (int)(kv_get('cron_last') ?? 0) : 0;
+    $chk($last > 0 && time() - $last < 1800, 'Cron läuft (letzter Lauf: ' . ($last ? fmt_local(gmdate('Y-m-d H:i:s', $last)) : 'noch nie') . ')');
+    if ($dbOk && $keyOk) {
+        $v = audit_verify();
+        $chk($v['ok'], 'Protokoll-Kette ' . ($v['ok'] ? 'intakt' : 'DEFEKT: ' . $v['error']) . " ({$v['count']} Einträge, Kopf-Hash {$v['head']})");
+    }
+    $json = (string)cfg('app.json_path');
+    $errs = bcm_validate(json_decode((string)@file_get_contents($json), true) ?? []);
+    $chk(!$errs, 'config.json Struktur' . ($errs ? ': ' . implode('; ', $errs) : ''));
+    $chk(!is_writable($json), 'config.json für PHP schreibgeschützt (Rechte 0444)');
+    if (!$errs) {
+        foreach (bcm_lint(bcm()) as $w) {
+            $chk(false, 'Textprüfung: ' . $w);
+        }
+    }
+    $chk(!is_file(__DIR__ . '/install.php') || is_installed(), 'Einrichtungsassistent gesperrt');
+    return $r;
+}
+
+/** Eingerichtet = Master-Key, Datenbank und mindestens ein Admin. Sperrt install.php. */
+function is_installed(): bool
+{
+    try {
+        master_key();
+        db();
+        return count(array_filter(users(), fn($u) => $u['role'] === 'admin')) > 0;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/** Eingabefeld für den TOTP-Code eines Admins (Bestätigung einzelner Aktionen). */
+function totp_input(string $idSuffix): string
+{
+    return '<label class="form-label small" for="t' . h($idSuffix) . '">Ihr TOTP-Code</label>'
+        . '<input class="form-control mb-2" id="t' . h($idSuffix) . '" type="text" name="totp" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required>';
+}
+
+/** Prüft den TOTP-Code einer Admin-Aktion inkl. Sperre und Protokoll. Rückgabe: Fehlermeldung oder null. */
+function admin_totp_check(array $user, string $object, string $action): ?string
+{
+    if (($wait = throttle_locked('s2t', $user['id'])) > 0) {
+        return 'Zu viele ungültige Codes. Bitte in ca. ' . (int)ceil($wait / 60) . ' Minute(n) erneut versuchen.';
+    }
+    $good = totp_verify_user($user, (string)($_POST['totp'] ?? ''));
+    throttle_record('s2t', $user['id'], $good);
+    if (!$good) {
+        fail_delay();
+        audit('totp.fail', $object, ['action' => $action]);
+        return 'Der Bestätigungscode ist ungültig oder bereits verwendet.';
+    }
+    return null;
+}
+
+/** otpauth-URI für Authenticator-Apps */
+function totp_uri(string $userId, string $secretB32): string
+{
+    $issuer = (string)cfg('app.title', 'Status');
+    return 'otpauth://totp/' . rawurlencode($issuer . ':' . $userId) . '?secret=' . $secretB32
+        . '&issuer=' . rawurlencode($issuer) . '&algorithm=SHA1&digits=6&period=30';
 }
 
 /* ====================================================================== */
@@ -2160,6 +2494,7 @@ function nav(string $active, bool $showLogout = true): void
     $links = ['status' => ['status.php', 'Status'], 'change' => ['change.php', 'Einstellungen']];
     if (session_status() === PHP_SESSION_ACTIVE && (stage2_user()['role'] ?? '') === 'admin') {
         $links['admin'] = ['admin.php', 'Benutzer'];
+        $links['system'] = ['system.php', 'System'];
     }
     foreach ($links as $k => [$href, $label]) {
         echo '<a class="nav-link py-1 px-2' . ($active === $k ? ' active" aria-current="page' : '') . '" href="' . $href . '">' . $label . '</a>';

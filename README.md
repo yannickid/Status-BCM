@@ -12,6 +12,8 @@ erreichbar, wenn Netzwerk, Telefon oder Mail im Haus gestört sind.
   <img src="docs/img/status-mobil.png" alt="Statusseite auf dem Smartphone" width="250">
   <img src="docs/img/vorschau-mobil.png" alt="Vorschau vor dem verbindlichen Setzen" width="250">
   <img src="docs/img/benutzer-mobil.png" alt="Benutzerverwaltung" width="250">
+  <img src="docs/img/qr-kopplung-mobil.png" alt="Authenticator-App per QR-Code koppeln" width="250">
+  <img src="docs/img/einrichtung-mobil.png" alt="Einrichtungsassistent im Browser" width="250">
 </p>
 
 ## Was es kann
@@ -27,29 +29,26 @@ erreichbar, wenn Netzwerk, Telefon oder Mail im Haus gestört sind.
   Audit-Anker per Mail.
 * **Verschlüsselte Ablage** (AES-256-GCM) von Meldungen, Standortdaten, Mail-Inhalten, Protokolldetails und
   Benutzerdaten.
-* **Benutzerverwaltung** mit Rollen (Redaktion / Admin), Einmalpasswort, Selbst-Einrichtung der Authenticator-App,
-  Passwort-Gültigkeit mit Erinnerungsmail.
+* **Benutzerverwaltung** mit Rollen (Redaktion / Admin), Einmalpasswort, Selbst-Einrichtung der Authenticator-App per
+  QR-Code, Passwort-Gültigkeit mit Erinnerungsmail.
+* **Komplett im Browser bedienbar:** Einrichtungsassistent, Systemseite (Empfänger, Zugangspasswort, Cron, Prüfung,
+  Testmail) und Notfallzugang per FTP-Datei. Eine Kommandozeile ist nicht nötig.
 * **Nutzung auswerten:** Anmeldungen je Stufe und Benutzer, anonymer Lesezähler je Status.
 * **Mobile First** mit Bootstrap 5.3 (lokal, nur CSS), **ohne JavaScript**, etwa 3 KB je Seitenaufruf.
 * **Keine Abhängigkeiten:** PHP ≥ 8.0, MySQL/MariaDB, kein Composer, kein CDN, eigener SMTP-Client mit
   Zertifikatsprüfung.
 
-## Schnellstart
+## Schnellstart (ohne Kommandozeile)
 
-```bash
-git clone https://github.com/yannickid/Status-BCM.git && cd Status-BCM
-php tests/selftest.php                                   # Selbsttest
-php setup.php init                                       # Master-Key + Cron-Token
-php setup.php set-stage1                                 # Zugangspasswort für alle
-php setup.php add-user chef "Vorname Nachname" chef@firma.de admin --config   # erster Admin (+ TOTP)
-php setup.php add-recipient alarm1@firma.de              # ALARM-Empfänger
-php setup.php set-cc1 isb@firma.de                       # Kopie/Erinnerungen/Audit-Anker
-# config.local.inc.php: base_url, db.*, mail.* eintragen; config.json: Standorte und Rufnummern
-# Dateien hochladen (ohne tests/, docs/), Cron alle 5 Min. auf cron.php
-```
+1. Datenbank und Absender-Postfach im Kundenmenü des Hosters anlegen.
+2. ZIP herunterladen, entpacken und per FTP hochladen (ohne `tests/` und `docs/`), leeren Ordner `storage` anlegen.
+3. Die Adresse der Seite aufrufen. Der **Einrichtungsassistent** fragt nach einem Code aus `storage/`, dann nach
+   Datenbank, Mailserver, Zugangspasswort, erstem Admin und Empfängern, und sperrt sich danach selbst.
+4. Anmelden und die **Authenticator-App per QR-Code** koppeln.
+5. Unter **System** die Cron-Adresse beim Hoster eintragen (alle 5 Minuten) und die Prüfung ansehen.
 
-Die ausführliche Schritt-für-Schritt-Anleitung, auch für Webspaces ohne SSH, steht in
-**[docs/01-installation.md](docs/01-installation.md)**.
+Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-installation.md)**. Mit SSH geht alles auch per
+`php setup.php …`.
 
 ## Dokumentation (Wiki)
 
@@ -69,19 +68,23 @@ Die ausführliche Schritt-für-Schritt-Anleitung, auch für Webspaces ohne SSH, 
 | `status.php` | aktueller Status |
 | `change.php` | Login Stufe 2, Status setzen (Formular → Vorschau → verbindlich), Verlauf, Protokoll, Nutzung, eigenes Passwort |
 | `admin.php` | Benutzerverwaltung (nur Admins) |
+| `system.php` | System (nur Admins): Prüfung, Cron-Adresse, ALARM-Empfänger, Kopie-Adresse, Zugangspasswort, Testmail |
+| `install.php` | Einrichtungsassistent (sperrt sich nach der Einrichtung) und Notfallzugang |
+| `qr.inc.php` | QR-Code als SVG für die Authenticator-App (ohne externe Dienste) |
 | `cron.php` | Erinnerungen, Passwort-Erinnerungen, Audit-Anker, Aufräumen (CLI oder URL mit Token) |
-| `setup.php` | Einrichtung und Notfallbefehle (nur CLI) |
+| `setup.php` | optional: dieselben Aufgaben per Kommandozeile |
 | `lib.inc.php` | gesamte Logik |
 | `config.inc.php` | Einstellungen mit Platzhaltern; echte Werte in `config.local.inc.php` (nicht im Git) |
 | `config.json` | Status-Katalog, Standorte, Mail-Vorlagen, kritische Begriffe |
 | `assets/` | Bootstrap 5.3.8 (MIT-Lizenz) und `app.css` |
-| `tests/` | `selftest.php` (SQLite/MySQL) und `webtest.php` (kompletter Ablauf über `php -S`) |
+| `tests/` | `selftest.php` (SQLite/MySQL), `webtest.php` (Ablauf über `php -S`), `installtest.php` (Einrichtung im Browser) |
 
 ## Tests
 
 ```bash
 php tests/selftest.php
 php tests/webtest.php
+php tests/installtest.php
 ```
 
 ## Grenzen

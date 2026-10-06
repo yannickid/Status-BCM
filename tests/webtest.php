@@ -46,82 +46,7 @@ for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $port); $i++) {
     usleep(100000);
 }
 
-$fails = 0;
-function ok(bool $c, string $m): void
-{
-    global $fails;
-    echo ($c ? '[ok]   ' : '[FAIL] ') . $m . "\n";
-    $fails += $c ? 0 : 1;
-}
-
-/** HTTP-Anfrage mit Cookie-Jar. Rückgabe: [Status, Header (lowercase => Wert), Body] */
-function req(string $method, string $url, array $post = [], string $jar = '', array $hdr = []): array
-{
-    $ch = curl_init($url);
-    $h = [];
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => 20,
-        CURLOPT_HTTPHEADER => $hdr,
-        CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$h) {
-            $p = explode(':', $line, 2);
-            if (count($p) === 2) {
-                $h[strtolower(trim($p[0]))] = trim($p[1]);
-            }
-            return strlen($line);
-        },
-    ]);
-    if ($jar !== '') {
-        curl_setopt($ch, CURLOPT_COOKIEJAR, $jar);
-        curl_setopt($ch, CURLOPT_COOKIEFILE, $jar);
-    }
-    if ($method === 'POST') {
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($post));
-    }
-    $body = (string)curl_exec($ch);
-    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    curl_close($ch);
-    return [$code, $h, $body];
-}
-
-function csrf(string $html): string
-{
-    return preg_match('/name="_csrf" value="([0-9a-f]+)"/', $html, $m) ? $m[1] : '';
-}
-
-/** Noch nicht verwendeter TOTP-Code (Server erlaubt ±1 Zeitschritt, jeder Schritt nur einmal je Benutzer). */
-function fresh_code(string $b32): string
-{
-    static $used = [];
-    while (true) {
-        $now = intdiv(time(), 30);
-        foreach ([0, 1] as $off) { // nicht -1: an einer Schrittgrenze wäre der Code sonst schon zu alt
-            if (!isset($used[$b32][$now + $off])) {
-                $used[$b32][$now + $off] = true;
-                return totp_now($b32, $off);
-            }
-        }
-        sleep(1);
-    }
-}
-
-function totp_now(string $b32, int $offset = 0): string
-{
-    $alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    $bits = '';
-    foreach (str_split($b32) as $c) {
-        $bits .= str_pad(decbin(strpos($alpha, $c)), 5, '0', STR_PAD_LEFT);
-    }
-    $key = '';
-    foreach (str_split($bits, 8) as $b) {
-        if (strlen($b) === 8) {
-            $key .= chr(bindec($b));
-        }
-    }
-    $hm = hash_hmac('sha1', pack('J', intdiv(time(), 30) + $offset), $key, true);
-    $o = ord($hm[19]) & 0x0f;
-    return str_pad((string)((unpack('N', substr($hm, $o, 4))[1] & 0x7fffffff) % 1000000), 6, '0', STR_PAD_LEFT);
-}
+require __DIR__ . '/http.inc.php';
 
 try {
     $jar = $tmp . '/jar.txt';
@@ -266,7 +191,8 @@ try {
     [$c] = req('POST', "$base/change.php", ['_csrf' => $t4, 'action' => 'login2', 'user' => 'carla', 'password' => $once], $jar4);
     [, , $b] = req('GET', "$base/change.php", [], $jar4);
     ok($c === 302 && str_contains($b, 'Zugang einrichten') && !str_contains($b, 'Neuen Status setzen'), 'Erster Login: nur Einrichtung möglich');
-    preg_match('/font-monospace text-break my-2">([A-Z2-7 ]+)</', $b, $m);
+    ok(str_contains($b, 'class="qr-code" src="data:image/svg+xml;base64,'), 'QR-Code für die Authenticator-App wird angezeigt');
+    preg_match('/font-monospace text-break my-1">([A-Z2-7 ]+)</', $b, $m);
     $carlaSecret = str_replace(' ', '', $m[1] ?? '');
     [, , $b] = req('POST', "$base/change.php", ['_csrf' => $t4, 'action' => 'preview', 'mode' => 'end'], $jar4);
     ok(str_contains($b, 'Bitte zuerst Passwort'), 'Status ändern vor der Einrichtung gesperrt');
@@ -280,6 +206,8 @@ try {
     ok(!str_contains($b, 'href="admin.php"'), 'Redaktion sieht keinen Menüpunkt Benutzer');
     [$c, , $b] = req('GET', "$base/admin.php", [], $jar4);
     ok($c === 403 && str_contains($b, 'Admins vorbehalten'), 'admin.php für Redaktion gesperrt');
+    [$c, , $b] = req('GET', "$base/system.php", [], $jar4);
+    ok($c === 403 && str_contains($b, 'Admins vorbehalten'), 'system.php für Redaktion gesperrt');
 
     [$c] = req('POST', "$base/admin.php", ['_csrf' => $t, 'action' => 'disable', 'id' => 'carla', 'totp' => fresh_code($secret)], $jar);
     [, , $b] = req('GET', "$base/change.php", [], $jar4);

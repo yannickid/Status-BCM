@@ -6,6 +6,7 @@
 declare(strict_types=1);
 define('SBCM', true);
 require __DIR__ . '/lib.inc.php';
+require __DIR__ . '/qr.inc.php';
 bootstrap();
 
 if (!stage1_ok()) {
@@ -53,7 +54,7 @@ if ($method === 'POST') {
         $needTotp = $act === 'setup' && $user['totp_secret'] === '';
         $new = (string)($_POST['new_password'] ?? '');
         if ($user['source'] !== 'db') {
-            $errors[] = 'Dieser Benutzer wird per CLI verwaltet (php setup.php).';
+            $errors[] = 'Dieser Benutzer steht in config.local.inc.php und wird dort verwaltet.';
         } elseif ($act === 'pw_change' && $needSetup) {
             $errors[] = 'Bitte zuerst die Einrichtung abschließen.';
         } elseif (($wait = throttle_locked('s2', $user['id'])) > 0) {
@@ -202,11 +203,13 @@ if (user_needs_setup($user)) {
         if (!is_array($en) || $en['u'] !== $user['id']) {
             $en = $_SESSION['enroll'] = ['u' => $user['id'], 's' => b32_encode(random_bytes(20))];
         }
-        $uri = 'otpauth://totp/' . rawurlencode((string)cfg('app.title', 'Status') . ':' . $user['id']) . '?secret=' . $en['s']
-            . '&issuer=' . rawurlencode((string)cfg('app.title', 'Status')) . '&algorithm=SHA1&digits=6&period=30';
-        echo '<div class="alert alert-info"><strong>Authenticator-App:</strong> neues Konto manuell anlegen, Typ "zeitbasiert", Schlüssel:'
-            . '<div class="fs-5 font-monospace text-break my-2">' . h(trim(chunk_split($en['s'], 4, ' '))) . '</div>'
-            . '<div class="small text-break">Link für Apps, die ihn übernehmen können: <a href="' . h($uri) . '">' . h($uri) . '</a></div></div>';
+        $uri = totp_uri($user['id'], $en['s']);
+        echo '<div class="alert alert-info"><strong>Authenticator-App koppeln:</strong> In der App (z. B. Microsoft/Google Authenticator, FreeOTP) '
+            . '"Konto hinzufügen" wählen und diesen QR-Code scannen.'
+            . '<div class="text-center my-2"><img class="qr-code" src="' . h(qr_svg_data_uri($uri)) . '" alt="QR-Code für die Authenticator-App" width="220" height="220"></div>'
+            . '<div class="small">Ohne Kamera (z. B. am selben Smartphone): Konto manuell anlegen, Typ "zeitbasiert", Schlüssel:</div>'
+            . '<div class="fs-5 font-monospace text-break my-1">' . h(trim(chunk_split($en['s'], 4, ' '))) . '</div>'
+            . '<div class="small text-break">oder diesen Link antippen: <a href="' . h($uri) . '">in Authenticator-App öffnen</a></div></div>';
         echo '<label class="form-label" for="tc">Aktueller 6-stelliger Code aus der App</label>'
             . '<input class="form-control form-control-lg mb-3" id="tc" type="text" name="totp" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required>';
     }
@@ -350,7 +353,7 @@ if ($user['source'] === 'db') {
     echo '<label class="form-label" for="cp2">Neues Passwort wiederholen</label><input class="form-control mb-3" id="cp2" type="password" name="new_password2" autocomplete="new-password" required>';
     echo '<div class="d-grid d-sm-block"><button class="btn btn-outline-primary" type="submit">Passwort ändern</button></div></form>';
 } else {
-    echo '<p class="small text-body-secondary mb-0">Dieser Benutzer steht noch in config.local.inc.php und wird per CLI verwaltet (<code>php setup.php migrate-users</code>).</p>';
+    echo '<p class="small text-body-secondary mb-0">Dieser Benutzer steht noch in config.local.inc.php und wird dort verwaltet (älterer Weg; Übernahme per <code>php setup.php migrate-users</code>).</p>';
 }
 echo '</div></details>';
 
@@ -381,7 +384,7 @@ foreach ($st['periods'] as $p) {
 }
 echo '</tr></tbody></table></div>';
 echo '<p class="small text-body-secondary">Stufe 1 zählt Anmeldungen (Sitzungen), nicht Personen – das Passwort ist gemeinsam. '
-    . 'Der Lesezähler im Statusverlauf zählt je Status einmal pro Sitzung, ohne IP oder Person. Tageswerte: <code>php setup.php stats</code>.</p>';
+    . 'Der Lesezähler im Statusverlauf zählt je Status einmal pro Sitzung, ohne IP oder Person. Tageswerte unter <a href="system.php">System</a> (Admins).</p>';
 echo '</div></details>';
 
 /* Meldungstexte */

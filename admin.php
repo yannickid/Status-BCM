@@ -34,44 +34,29 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $allowed = ['create', 'reset_pw', 'reset_totp', 'disable', 'enable', 'role'];
     if (!in_array($act, $allowed, true)) {
         $errors[] = 'Ungültige Aktion.';
-    } elseif (($wait = throttle_locked('s2t', $user['id'])) > 0) {
-        $errors[] = 'Zu viele ungültige Codes. Bitte in ca. ' . (int)ceil($wait / 60) . ' Minute(n) erneut versuchen.';
+    } elseif ($err = admin_totp_check($user, 'user:' . $target, $act)) {
+        $errors[] = $err;
     } else {
-        $good = totp_verify_user($user, (string)($_POST['totp'] ?? ''));
-        throttle_record('s2t', $user['id'], $good);
-        if (!$good) {
-            fail_delay();
-            audit('totp.fail', 'user:' . $target, ['action' => $act]);
-            $errors[] = 'Der Bestätigungscode ist ungültig oder bereits verwendet.';
-        } else {
-            try {
-                $once = account_action($act, $target, [
-                    'name' => (string)($_POST['name'] ?? ''), 'email' => (string)($_POST['email'] ?? ''),
-                    'role' => (string)($_POST['role'] ?? 'editor'),
-                ], $user['id'], ['totp' => true]);
-                $msg = [
-                    'create' => 'Benutzer angelegt.', 'reset_pw' => 'Passwort zurückgesetzt.', 'reset_totp' => 'TOTP zurückgesetzt – die App wird beim nächsten Login neu gekoppelt.',
-                    'disable' => 'Benutzer deaktiviert.', 'enable' => 'Benutzer aktiviert.', 'role' => 'Rolle geändert.',
-                ][$act];
-                flash('ok', $target . ': ' . $msg);
-                if ($once !== null) {
-                    flash('info', 'Einmalpasswort für ' . $target . ': ' . $once . ' – nur jetzt sichtbar. Bitte persönlich oder telefonisch übergeben, '
-                        . 'nicht per E-Mail. Beim ersten Login werden ein eigenes Passwort und die Authenticator-App eingerichtet.');
-                }
-                redirect('admin.php');
-            } catch (InvalidArgumentException $e) {
-                $errors[] = $e->getMessage();
-                $old = $_POST;
+        try {
+            $once = account_action($act, $target, [
+                'name' => (string)($_POST['name'] ?? ''), 'email' => (string)($_POST['email'] ?? ''),
+                'role' => (string)($_POST['role'] ?? 'editor'),
+            ], $user['id'], ['totp' => true]);
+            $msg = [
+                'create' => 'Benutzer angelegt.', 'reset_pw' => 'Passwort zurückgesetzt.', 'reset_totp' => 'TOTP zurückgesetzt – die App wird beim nächsten Login neu gekoppelt.',
+                'disable' => 'Benutzer deaktiviert.', 'enable' => 'Benutzer aktiviert.', 'role' => 'Rolle geändert.',
+            ][$act];
+            flash('ok', $target . ': ' . $msg);
+            if ($once !== null) {
+                flash('info', 'Einmalpasswort für ' . $target . ': ' . $once . ' – nur jetzt sichtbar. Bitte persönlich oder telefonisch übergeben, '
+                    . 'nicht per E-Mail. Beim ersten Login werden ein eigenes Passwort und die Authenticator-App eingerichtet.');
             }
+            redirect('admin.php');
+        } catch (InvalidArgumentException $e) {
+            $errors[] = $e->getMessage();
+            $old = $_POST;
         }
     }
-}
-
-/** Formularfeld für den TOTP-Code des Admins */
-function totp_field(string $idSuffix): string
-{
-    return '<label class="form-label small" for="t' . h($idSuffix) . '">Ihr TOTP-Code</label>'
-        . '<input class="form-control mb-2" id="t' . h($idSuffix) . '" type="text" name="totp" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required>';
 }
 
 function action_form(string $id, string $action, string $label, string $btn, string $extra = ''): string
@@ -79,7 +64,7 @@ function action_form(string $id, string $action, string $label, string $btn, str
     $sfx = $action . '-' . $id;
     return '<form method="post" action="admin.php" class="border rounded p-2 mb-2" autocomplete="off">' . csrf_field()
         . '<input type="hidden" name="action" value="' . h($action) . '"><input type="hidden" name="id" value="' . h($id) . '">'
-        . '<div class="fw-semibold small mb-1">' . h($label) . '</div>' . $extra . totp_field($sfx)
+        . '<div class="fw-semibold small mb-1">' . h($label) . '</div>' . $extra . totp_input($sfx)
         . '<button class="btn btn-sm ' . $btn . '" type="submit">' . h($label) . '</button></form>';
 }
 
@@ -101,14 +86,14 @@ foreach ($errors as $e) {
 }
 
 /* Richtlinie und Stufe-1-Passwort */
-$s1set = (string)cfg('auth.stage1_set_at', '');
+$s1set = stage1_set_at();
 $s1max = (int)cfg('auth.stage1_max_age_days', 0);
 echo '<div class="card shadow-sm mb-3"><div class="card-body small">';
 echo '<div><strong>Passwort-Gültigkeit Stufe 2:</strong> ' . ($maxAge > 0 ? $maxAge . ' Tage, Erinnerung ' . (int)cfg('auth.password_remind_days', 14)
     . ' Tage vorher per E-Mail (Benutzer + cc_default_mail1)' : 'unbefristet (Wechsel nur anlassbezogen)') . '</div>';
 echo '<div><strong>Zugangspasswort Stufe 1:</strong> gesetzt ' . h($s1set !== '' ? fmt_local($s1set) : 'unbekannt (vor Version mit Datum)')
     . ($s1max > 0 && $s1set !== '' ? ' · Wechsel empfohlen bis ' . h(fmt_local(gmdate('Y-m-d H:i:s', utc_ts($s1set) + $s1max * 86400))) : '')
-    . ' · Änderung per <code>php setup.php set-stage1</code></div>';
+    . ' · Änderung unter <a href="system.php">System</a></div>';
 echo '</div></div>';
 
 /* Benutzerliste */
@@ -129,7 +114,7 @@ foreach ($all as $id => $u) {
         . ' · gültig bis: ' . h(empty($u['pw_valid_until']) ? 'unbefristet' : fmt_local($u['pw_valid_until']))
         . ' · letzte Anmeldung: ' . h(fmt_local($lastLogin[$id] ?? null)) . '</div>';
     if ($u['source'] === 'config') {
-        echo '<div class="small mt-1">Steht in config.local.inc.php – Verwaltung per CLI (<code>php setup.php migrate-users</code>).</div>';
+        echo '<div class="small mt-1">Steht in config.local.inc.php (älterer Weg) – Änderung nur dort bzw. per <code>php setup.php migrate-users</code>.</div>';
     } else {
         echo '<details class="mt-2"><summary class="small">Aktionen</summary><div class="mt-2">';
         echo action_form($id, 'reset_pw', 'Passwort zurücksetzen (Einmalpasswort)', 'btn-outline-primary');
@@ -154,6 +139,6 @@ echo '<label class="form-label" for="nid">Benutzerkennung</label><input class="f
 echo '<label class="form-label" for="nname">Name</label><input class="form-control mb-2" id="nname" name="name" maxlength="100" required value="' . $o('name') . '">';
 echo '<label class="form-label" for="nmail">E-Mail (für Erinnerungen)</label><input class="form-control mb-2" id="nmail" type="email" name="email" required value="' . $o('email') . '">';
 echo '<label class="form-label" for="nrole">Rolle</label><select class="form-select mb-2" id="nrole" name="role"><option value="editor">Redaktion (Status setzen)</option><option value="admin">Admin (zusätzlich Benutzerverwaltung)</option></select>';
-echo totp_field('new');
+echo totp_input('new');
 echo '<div class="d-grid d-sm-block"><button class="btn btn-primary" type="submit">Anlegen</button></div></form></div></div>';
 page_end();

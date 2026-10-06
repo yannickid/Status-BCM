@@ -25,7 +25,8 @@ Sie haben ein Einmalpasswort erhalten. Beim ersten Login erscheint "Zugang einri
 1. Einmalpasswort eingeben, dann zweimal ein **eigenes Passwort** (mind. 12 Zeichen; ein Satz wie
    "Mein Kaffee ist um 7 Uhr kalt" ist ideal).
 2. Die **Authenticator-App** auf dem Smartphone öffnen (z. B. Microsoft Authenticator, Google Authenticator,
-   FreeOTP) → Konto hinzufügen → Schlüssel manuell eingeben → den angezeigten Schlüssel abtippen (Typ "zeitbasiert").
+   FreeOTP) → Konto hinzufügen → den angezeigten **QR-Code scannen**. Ohne Kamera: den Schlüssel darunter abtippen
+   (Typ "zeitbasiert") oder den Link antippen.
 3. Den aktuellen 6-stelligen Code aus der App eingeben → **Speichern**.
 
 ### Neuen Status setzen
@@ -68,7 +69,7 @@ Sie müssen es dann aber beim nächsten Login sofort ändern.
 * Stufe 1 zählt Anmeldungen mit dem gemeinsamen Passwort, keine Personen.
 * Stufe 2 zählt je Benutzer, mit letzter Anmeldung und Fehlversuchen.
 
-Tageswerte gibt es per `php setup.php stats 90`.
+Tageswerte der letzten 30 Tage zeigt Admins die Seite **System**.
 
 ### Protokoll
 
@@ -91,11 +92,28 @@ für die nächste Aktion warten Sie bis zum nächsten Code (höchstens 30 Sekund
 Die Liste zeigt je Benutzer: Rolle, ob die TOTP-App gekoppelt ist, wann das Passwort gesetzt wurde, wie lange es gilt
 (grün "gültig", gelb "läuft bald ab", rot "abgelaufen") und die letzte Anmeldung.
 
-Oben sehen Sie außerdem, wann das **gemeinsame Zugangspasswort** (Stufe 1) zuletzt gesetzt wurde. Es wird per
-`php setup.php set-stage1` gewechselt, danach erhalten alle Beschäftigten das neue Passwort.
+Oben sehen Sie außerdem, wann das **gemeinsame Zugangspasswort** (Stufe 1) zuletzt gesetzt wurde. Gewechselt wird es
+unter **System**.
 
 **Empfehlung:** Mindestens **zwei Admins** und mindestens **zwei Personen je Schicht bzw. Bereitschaft** mit
 Redaktionsrechten, damit im Ernstfall immer jemand den Status setzen kann.
+
+## System (Admins)
+
+Menü **System** (nur Admins). Änderungen verlangen Ihren TOTP-Code und stehen im Protokoll.
+
+| Bereich | Inhalt |
+|---|---|
+| Prüfung | alle Punkte von Konfiguration, Datenbank, Benutzern, Empfängern, Cron, Protokoll-Kette (mit Kopf-Hash) und Meldungstexten. "offen" heißt: bitte ansehen |
+| Cron | die Adresse für den Cronjob beim Hoster und "Jetzt einmal ausführen" |
+| ALARM-Empfänger | Adressen hinzufügen (eine je Zeile) oder entfernen; sichtbar nur maskiert |
+| Kopie-Adresse | `cc_default_mail1` ändern (Erinnerungen, Kopie der ALARM-Mails, Audit-Anker) |
+| Zugangspasswort für alle | Stufe 1 wechseln; gilt sofort für neue Anmeldungen. Danach intern bekannt geben |
+| Mailversand testen | Testmail an Ihre eigene Adresse |
+| Anmeldungen je Tag | 30 Tage, Stufe 1 / Stufe 2 / Fehlversuche |
+
+Hat der einzige Admin Passwort und Smartphone verloren, hilft der Notfallzugang, siehe
+[Betrieb → Notfälle](04-betrieb.md#notfälle-im-betrieb).
 
 ## Notfall-Kurzkarte (zum Ausdrucken)
 
