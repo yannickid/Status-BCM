@@ -104,5 +104,5 @@ echo '<label class="form-label" for="pw">Passwort</label>';
 echo '<input class="form-control form-control-lg mb-3" id="pw" type="password" name="password" autocomplete="current-password" required>';
 echo '<div class="hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>';
 echo '<div class="d-grid"><button class="btn btn-primary btn-lg" type="submit">Anmelden</button></div>';
-echo '</form><p class="small text-body-secondary mt-3 mb-0">Gemeinsamen Zugang oder persönliche Kennung verwenden.</p></div></div></div></div>';
+echo '</form></div></div></div></div>';
 page_end();
