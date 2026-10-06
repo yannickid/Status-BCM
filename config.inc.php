@@ -104,6 +104,8 @@ $config = [
         'stage1_max_age_days'            => 365,
         // true = TOTP bei JEDER Änderung (auch Entwarnung); sonst nur lt. config.json / bei ALARM-Mail
         'totp_enforce_all'     => false,
+        // true = persönliche Kennungen brauchen schon beim Login den TOTP-Code (gemeinsamer Lesezugang nie)
+        'totp_at_login'        => true,
     ],
 
     /* ---------------------------------------------------------------- Cron */
@@ -125,6 +127,34 @@ $config = [
 
     'limits' => [
         'max_validity_days' => 30,
+    ],
+
+    // Weitere Alarmkanäle neben der E-Mail. Empfänger (Signal) bzw. Szenario (GroupAlarm) je Alarmkreis unter System.
+    // Zugangsdaten nur hier (per FTP), nie im Browser: Wer sie ändern kann, könnte Alarme umleiten.
+    'channels' => [
+        'transport' => '',               // '' = wie mail.transport ('log' schreibt nur nach storage/outbox), sonst 'http'
+        'timeout'   => 10,               // Sekunden je Aufruf
+        'signal' => [
+            // signal-cli-rest-api (eigener Server, z. B. Docker), immer hinter HTTPS und Zugangsschutz
+            'url'    => '',              // z. B. https://signal.ihre-domain.de/v2/send
+            'number' => '',              // registrierte Absendernummer, z. B. +4915112345678
+            'token'  => '',              // optional: "Authorization: Bearer …" (enc:v1:… möglich)
+            'user'   => '', 'pass' => '', // optional: HTTP-Basic-Auth des vorgeschalteten Proxys
+        ],
+        'groupalarm' => [
+            'url'             => 'https://app.groupalarm.com/api/v1/alarm',
+            'token'           => '',     // Personal-Access-Token (enc:v1:… möglich)
+            'organization_id' => 0,
+            'mode'            => 'best-effort',
+            'kinds'           => ['new', 'update', 'end'], // bei welchen ALARM-Mails auch GroupAlarm auslöst
+        ],
+    ],
+
+    // Selbstüberwachung
+    'monitor' => [
+        'cron_stale_minutes' => 15,      // Cron länger nicht gelaufen -> Warnung (System, health.php, Mail an cc_default_mail1)
+        'warn_repeat_minutes' => 60,     // Wiederholung der Warnmail
+        'health_token' => '',            // optional: health.php nur mit ?t=<token> (für externe Uptime-Dienste)
     ],
 
     'net' => [

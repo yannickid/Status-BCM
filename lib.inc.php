@@ -10,7 +10,7 @@ if (!defined('SBCM')) {
     exit;
 }
 
-const SBCM_VERSION = '1.3.0';
+const SBCM_VERSION = '1.4.0';
 define('SBCM_ZERO', str_repeat('0', 64));
 
 /* ====================================================================== */
@@ -858,13 +858,15 @@ function alarm_circles(): array
 {
     $v = setting_get('circles');
     if (!is_array($v)) {
-        return [['id' => 'allgemein', 'name' => 'Allgemein', 'emails' => legacy_recipients()]];
+        return [['id' => 'allgemein', 'name' => 'Allgemein', 'emails' => legacy_recipients(), 'signal' => [], 'groupalarm' => '']];
     }
     $out = [];
     foreach ($v as $c) {
         if (is_array($c) && preg_match('/^[a-z0-9-]{1,32}$/', (string)($c['id'] ?? ''))) {
             $out[] = ['id' => (string)$c['id'], 'name' => (string)($c['name'] ?? $c['id']),
-                'emails' => array_values(array_filter(array_map('strval', (array)($c['emails'] ?? [])), fn($e) => filter_var($e, FILTER_VALIDATE_EMAIL)))];
+                'emails' => array_values(array_filter(array_map('strval', (array)($c['emails'] ?? [])), fn($e) => filter_var($e, FILTER_VALIDATE_EMAIL))),
+                'signal' => array_values(array_filter(array_map(fn($r) => signal_recipient((string)$r), (array)($c['signal'] ?? [])))),
+                'groupalarm' => preg_match('/^[0-9]{1,12}$/', (string)($c['groupalarm'] ?? '')) ? (string)$c['groupalarm'] : ''];
         }
     }
     return $out;
@@ -905,7 +907,7 @@ function circle_create(string $name, string $emails, string $actor, array $how =
         return 'Einen Kreis mit diesem Namen gibt es schon.';
     }
     $id = slug_id($name, array_column($c, 'id'), 'kreis');
-    $c[] = ['id' => $id, 'name' => $name, 'emails' => $ok];
+    $c[] = ['id' => $id, 'name' => $name, 'emails' => $ok, 'signal' => [], 'groupalarm' => ''];
     circles_store($c, 'circle_create', ['circle' => $name, 'count' => count($ok)], $actor, $how);
     return null;
 }
@@ -948,6 +950,257 @@ function circle_delete(string $id, string $actor, array $how = []): ?string
     $name = $c[$i]['name'];
     array_splice($c, $i, 1);
     circles_store($c, 'circle_delete', ['circle' => $name], $actor, $how);
+    return null;
+}
+
+/* ====================================================================== */
+/* Selbstüberwachung: Cron-Ausfall erkennen                               */
+/* ====================================================================== */
+
+/** Minuten seit dem letzten Cron-Lauf; null = noch nie gelaufen. */
+function cron_age_minutes(?int $now = null): ?int
+{
+    $last = (int)(kv_get('cron_last') ?? 0);
+    return $last > 0 ? intdiv(($now ?? time()) - $last, 60) : null;
+}
+
+function cron_stale(?int $now = null): bool
+{
+    $age = cron_age_minutes($now);
+    return $age !== null && $age >= max(5, (int)cfg('monitor.cron_stale_minutes', 15));
+}
+
+/**
+ * Wird bei Seitenaufrufen ausgeführt: Läuft der Cron nicht mehr, geht höchstens alle monitor.warn_repeat_minutes
+ * eine Warnmail an cc_default_mail1 (der Cron selbst kann seinen eigenen Ausfall nicht melden).
+ */
+function monitor_tick(): void
+{
+    try {
+        if (!cron_stale()) {
+            return;
+        }
+        $repeat = max(10, (int)cfg('monitor.warn_repeat_minutes', 60)) * 60;
+        $last = (int)(kv_get('cron_warn_ts') ?? 0);
+        $cc1 = cc_default_mail1();
+        if (time() - $last < $repeat || $cc1 === '') {
+            return;
+        }
+        kv_set('cron_warn_ts', (string)time());
+        $age = (int)cron_age_minutes();
+        $subject = 'Warnung: Cron läuft nicht (' . (string)cfg('app.title', 'Status') . ')';
+        $body = "Der Cron der Statusseite ist seit $age Minuten nicht gelaufen.\n"
+            . "Ohne Cron gibt es keine Erinnerungen bei Ablauf von Meldungen und keinen täglichen Audit-Anker.\n\n"
+            . "Bitte den Cronjob beim Hoster prüfen (Adresse unter System).\n" . rtrim((string)cfg('app.base_url'), '/') . "/system.php\n";
+        $sum = mail_record('monitor', null, $subject, $body, mail_deliver(['to' => [$cc1], 'subject' => $subject, 'body' => $body, 'priority' => true]));
+        audit('monitor.cron_stale', 'cron', ['minutes' => $age, 'ok' => $sum['ok'], 'failed' => $sum['failed']], 'system:monitor', 0);
+    } catch (Throwable $e) {
+        error_log('Status-BCM: Überwachung: ' . $e->getMessage());
+    }
+}
+
+/* ====================================================================== */
+/* Weitere Alarmkanäle: Signal (signal-cli-rest-api), GroupAlarm          */
+/* ====================================================================== */
+
+/** Normalisiert einen Signal-Empfänger (+49… oder group.…). null = ungültig. */
+function signal_recipient(string $r): ?string
+{
+    $r = trim($r);
+    if (str_starts_with($r, 'group.')) {
+        return preg_match('/^group\.[A-Za-z0-9+\/=_-]{8,200}$/', $r) ? $r : null;
+    }
+    $n = preg_replace('/[\s\/()-]+/', '', $r) ?? '';
+    if (str_starts_with($n, '00')) {
+        $n = '+' . substr($n, 2);
+    }
+    return preg_match('/^\+[1-9][0-9]{6,14}$/', $n) ? $n : null;
+}
+
+function mask_phone(string $r): string
+{
+    if (str_starts_with($r, 'group.')) {
+        return 'group.' . substr($r, 6, 3) . '…';
+    }
+    return substr($r, 0, 4) . str_repeat('*', max(2, strlen($r) - 6)) . substr($r, -2);
+}
+
+function channel_enabled(string $ch): bool
+{
+    if ($ch === 'signal') {
+        return (string)cfg('channels.signal.url', '') !== '' && (string)cfg('channels.signal.number', '') !== '';
+    }
+    if ($ch === 'groupalarm') {
+        return (string)cfg('channels.groupalarm.token', '') !== '' && (int)cfg('channels.groupalarm.organization_id', 0) > 0;
+    }
+    return false;
+}
+
+/** Signal-Empfänger und GroupAlarm-Szenarien der gewählten Kreise. */
+function channel_targets(array $spec): array
+{
+    $sig = [];
+    $ga = [];
+    foreach (alarm_circles() as $c) {
+        if (in_array($c['id'], (array)($spec['circles'] ?? []), true)) {
+            foreach ($c['signal'] as $r) {
+                $sig[$r] = $r;
+            }
+            if ($c['groupalarm'] !== '') {
+                $ga[$c['groupalarm']] = $c['name'];
+            }
+        }
+    }
+    return ['signal' => array_values($sig), 'groupalarm' => $ga];
+}
+
+/** HTTPS-POST mit JSON (ohne Weiterleitungen, mit Zertifikatsprüfung). Rückgabe: [HTTP-Status, Antwort, Fehler] */
+function http_post_json(string $url, array $body, array $headers): array
+{
+    $p = parse_url($url);
+    $host = strtolower((string)($p['host'] ?? ''));
+    $local = in_array($host, ['localhost', '127.0.0.1', '::1'], true);
+    if (!$p || !in_array($p['scheme'] ?? '', $local ? ['https', 'http'] : ['https'], true)) {
+        return [0, '', 'nur https:// erlaubt'];
+    }
+    $json = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $headers[] = 'Content-Type: application/json';
+    $timeout = max(2, (int)cfg('channels.timeout', 10));
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => $json, CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => $timeout, CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2, CURLOPT_PROTOCOLS => CURLPROTO_HTTPS | ($local ? CURLPROTO_HTTP : 0)]);
+        $resp = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $err = $resp === false ? curl_error($ch) : '';
+        curl_close($ch);
+        return [$code, (string)$resp, $err];
+    }
+    $ctx = stream_context_create(['http' => ['method' => 'POST', 'header' => implode("\r\n", $headers), 'content' => $json,
+        'timeout' => $timeout, 'follow_location' => 0, 'ignore_errors' => true], 'ssl' => ['verify_peer' => true, 'verify_peer_name' => true]]);
+    $resp = @file_get_contents($url, false, $ctx);
+    $code = 0;
+    foreach ($http_response_header ?? [] as $h) {
+        if (preg_match('#^HTTP/\S+ (\d{3})#', $h, $m)) {
+            $code = (int)$m[1];
+        }
+    }
+    return [$code, (string)$resp, $resp === false ? 'Verbindung fehlgeschlagen' : ''];
+}
+
+/** Ein Kanal-Aufruf: im Testmodus nur nach storage/outbox schreiben (Zugangsdaten geschwärzt). */
+function channel_call(string $channel, string $url, array $body, array $headers): array
+{
+    $mode = (string)cfg('channels.transport', '');
+    if ($mode === '') {
+        $mode = (string)cfg('mail.transport', 'smtp') === 'log' ? 'log' : 'http';
+    }
+    if ($mode === 'log') {
+        $dir = storage_dir() . '/outbox';
+        @mkdir($dir, 0700, true);
+        $red = array_map(fn($h) => preg_replace('/^([^:]+):.*$/', '$1: ***', $h), $headers);
+        file_put_contents($dir . '/' . gmdate('Ymd-His') . '-' . $channel . '-' . bin2hex(random_bytes(4)) . '.json',
+            json_encode(['channel' => $channel, 'url' => $url, 'headers' => $red, 'body' => $body], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return [200, '', ''];
+    }
+    return http_post_json($url, $body, $headers);
+}
+
+/**
+ * Alarm über Signal und GroupAlarm an die gewählten Kreise. Rückgabe je Kanal: [ok, failed] (nur eingerichtete Kanäle).
+ * Inhalt wie die ALARM-Mail (Betreff + Text); Adressen/Nummern erscheinen im Protokoll nur als Anzahl.
+ */
+function send_alarm_channels(string $kind, int $statusId, string $subject, string $body, string $author, array $spec): array
+{
+    $t = channel_targets($spec);
+    $out = [];
+    $text = mb_substr($subject . "\n\n" . trim($body), 0, 2000);
+    if ($t['signal'] && channel_enabled('signal')) {
+        $h = [];
+        if (($tok = cfg_secret((string)cfg('channels.signal.token', ''))) !== '') {
+            $h[] = 'Authorization: Bearer ' . $tok;
+        } elseif ((string)cfg('channels.signal.user', '') !== '') {
+            $h[] = 'Authorization: Basic ' . base64_encode(cfg('channels.signal.user') . ':' . cfg_secret((string)cfg('channels.signal.pass', '')));
+        }
+        $ok = 0;
+        $fail = 0;
+        foreach (array_chunk($t['signal'], 20) as $chunk) {
+            [$code, , $err] = channel_call('signal', (string)cfg('channels.signal.url'),
+                ['message' => $text, 'number' => (string)cfg('channels.signal.number'), 'recipients' => $chunk], $h);
+            if ($code >= 200 && $code < 300) {
+                $ok += count($chunk);
+            } else {
+                $fail += count($chunk);
+                error_log('Status-BCM: Signal-Versand fehlgeschlagen (HTTP ' . $code . ($err !== '' ? ', ' . $err : '') . ')');
+            }
+        }
+        $out['signal'] = [$ok, $fail];
+    }
+    $kinds = (array)cfg('channels.groupalarm.kinds', ['new', 'update', 'end']);
+    if ($t['groupalarm'] && channel_enabled('groupalarm') && in_array($kind, $kinds, true)) {
+        $ok = 0;
+        $fail = 0;
+        foreach (array_keys($t['groupalarm']) as $scenario) {
+            [$code, , $err] = channel_call('groupalarm', (string)cfg('channels.groupalarm.url', 'https://app.groupalarm.com/api/v1/alarm'), [
+                'eventName' => mb_substr($subject, 0, 100), 'message' => $text, 'mode' => (string)cfg('channels.groupalarm.mode', 'best-effort'),
+                'organizationID' => (int)cfg('channels.groupalarm.organization_id'), 'scenarioID' => (int)$scenario,
+                'startTime' => gmdate('Y-m-d\TH:i:s\Z'),
+            ], ['Personal-Access-Token: ' . cfg_secret((string)cfg('channels.groupalarm.token'))]);
+            if ($code >= 200 && $code < 300) {
+                $ok++;
+            } else {
+                $fail++;
+                error_log('Status-BCM: GroupAlarm fehlgeschlagen (HTTP ' . $code . ($err !== '' ? ', ' . $err : '') . ')');
+            }
+        }
+        $out['groupalarm'] = [$ok, $fail];
+    }
+    if ($out) {
+        audit('channel.alarm', 'status:' . $statusId, ['kind' => $kind, 'channels' => array_map(fn($v) => ['ok' => $v[0], 'failed' => $v[1]], $out)],
+            $author, setting_level($author));
+    }
+    return $out;
+}
+
+/** Signal-Empfänger und GroupAlarm-Szenario eines Kreises setzen. $removeSignal = Positionen. */
+function circle_channels_set(string $id, string $addSignal, array $removeSignal, string $scenario, string $actor, array $how = []): ?string
+{
+    $c = alarm_circles();
+    $i = array_search($id, array_column($c, 'id'), true);
+    if ($i === false) {
+        return 'Kreis nicht gefunden.';
+    }
+    $new = [];
+    foreach (preg_split('/[\r\n,;]+/', $addSignal, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $r) {
+        if (trim($r) === '') {
+            continue;
+        }
+        $n = signal_recipient($r);
+        if ($n === null) {
+            return 'Ungültiger Signal-Empfänger: Rufnummer im Format +49… oder Gruppen-ID group.…';
+        }
+        $new[$n] = $n;
+    }
+    $scenario = trim($scenario);
+    if ($scenario !== '' && !preg_match('/^[0-9]{1,12}$/', $scenario)) {
+        return 'GroupAlarm-Szenario: nur die Nummer (Ziffern).';
+    }
+    $gone = [];
+    foreach ($removeSignal as $r) {
+        if (isset($c[$i]['signal'][(int)$r])) {
+            $gone[] = $c[$i]['signal'][(int)$r];
+        }
+    }
+    $add = array_values(array_diff(array_values($new), $c[$i]['signal']));
+    if (!$add && !$gone && $scenario === $c[$i]['groupalarm']) {
+        return 'Keine Änderung.';
+    }
+    $c[$i]['signal'] = array_values(array_merge(array_diff($c[$i]['signal'], $gone), $add));
+    $c[$i]['groupalarm'] = $scenario;
+    circles_store($c, 'circle_channels', ['circle' => $c[$i]['name'], 'masked' => array_merge(
+        array_map(fn($e) => '+' . mask_phone($e), $add), array_map(fn($e) => '-' . mask_phone($e), $gone)),
+        'groupalarm' => $scenario], $actor, $how);
     return null;
 }
 
@@ -1714,6 +1967,94 @@ function verify_user(string $id, string $pw): ?array
     return ($ok && $u && $u['hash'] !== '') ? (['id' => $id] + $u) : null;
 }
 
+/* --- Persönliche Anmeldung: Kennung + Passwort, danach TOTP-Code (Startseite und Einstellungen) --- */
+
+/**
+ * Schritt 1. Rückgabe: Fehlermeldung oder null. Bei Erfolg ist entweder der TOTP-Schritt offen
+ * (personal_login_pending()) oder – ohne gekoppelte App (Ersteinrichtung) – die Anmeldung abgeschlossen.
+ */
+function personal_login_start(string $key, string $pw): ?string
+{
+    $wait = max(throttle_locked('s1'), throttle_locked('s2', $key));
+    if ($wait > 0) {
+        return 'Zu viele Versuche. Bitte in ca. ' . (int)ceil($wait / 60) . ' Minute(n) erneut versuchen.';
+    }
+    $u = verify_user($key, $pw);
+    throttle_record('s1', null, $u !== null);
+    throttle_record('s2', $key, $u !== null);
+    if (!$u) {
+        fail_delay();
+        audit('login2.fail', 'session', ['user' => mb_substr(preg_replace('/[^\w.@-]/u', '?', $key) ?? '', 0, 32)], 'anonymous', 1);
+        return 'Anmeldung fehlgeschlagen.';
+    }
+    if ($u['totp_secret'] === '' || !cfg('auth.totp_at_login', true)) {
+        // Noch keine App gekoppelt: Die Ersteinrichtung verlangt sie sofort, andere Aktionen sind bis dahin gesperrt.
+        personal_login_finish($u, false);
+        return null;
+    }
+    session_regenerate_id(true);
+    $_SESSION['login_totp'] = ['u' => $u['id'], 't' => time(), 'n' => 0];
+    return null;
+}
+
+/** Kennung, deren TOTP-Schritt offen ist (höchstens 5 Minuten), sonst null. */
+function personal_login_pending(): ?string
+{
+    $p = $_SESSION['login_totp'] ?? null;
+    if (!is_array($p) || time() - (int)$p['t'] > 300) {
+        unset($_SESSION['login_totp']);
+        return null;
+    }
+    return (string)$p['u'];
+}
+
+/** Schritt 2: TOTP-Code. Rückgabe: Fehlermeldung oder null (angemeldet). */
+function personal_login_totp(string $code): ?string
+{
+    $id = personal_login_pending();
+    if ($id === null) {
+        return 'Die Anmeldung ist abgelaufen. Bitte erneut anmelden.';
+    }
+    if (($wait = throttle_locked('s2t', $id)) > 0) {
+        unset($_SESSION['login_totp']);
+        return 'Zu viele ungültige Codes. Bitte in ca. ' . (int)ceil($wait / 60) . ' Minute(n) erneut versuchen.';
+    }
+    $u = users()[$id] ?? null;
+    $good = $u !== null && totp_verify_user(['id' => $id] + $u, $code);
+    throttle_record('s2t', $id, $good);
+    if (!$good) {
+        fail_delay();
+        audit('totp.fail', 'session', ['action' => 'login', 'user' => $id], 'anonymous', 1);
+        if (++$_SESSION['login_totp']['n'] >= 5) {
+            unset($_SESSION['login_totp']);
+        }
+        return 'Der Code aus der Authenticator-App ist ungültig oder bereits verwendet.';
+    }
+    unset($_SESSION['login_totp']);
+    personal_login_finish(['id' => $id] + $u, true);
+    return null;
+}
+
+function personal_login_finish(array $u, bool $totp): void
+{
+    session_regenerate_id(true);
+    $_SESSION['s1'] = $_SESSION['s1'] ?? time();
+    $_SESSION['s2'] = ['u' => $u['id'], 't' => time()];
+    audit('login2.ok', 'session', ['how' => ['totp' => $totp]], $u['id'], 2);
+}
+
+/** Formular für den TOTP-Schritt der Anmeldung. */
+function render_login_totp(string $action, string $userId): void
+{
+    echo '<form method="post" action="' . h($action) . '" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="login_totp">'
+        . '<p class="small text-body-secondary">Angemeldet als <strong>' . h($userId) . '</strong>. Bitte den aktuellen Code aus der Authenticator-App eingeben.</p>'
+        . '<label class="form-label" for="lt">Code aus der App (6 Stellen)</label>'
+        . '<input class="form-control form-control-lg mb-3" id="lt" type="text" name="totp" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required autofocus>'
+        . '<div class="d-grid gap-2"><button class="btn btn-primary btn-lg" type="submit">Bestätigen</button></div></form>'
+        . '<form method="post" action="' . h($action) . '" class="mt-2 d-grid">' . csrf_field() . '<input type="hidden" name="action" value="login_cancel">'
+        . '<button class="btn btn-outline-secondary" type="submit">Abbrechen</button></form>';
+}
+
 /* --- Brute-Force-Bremse --- */
 
 function throttle_locked(string $scope, ?string $subject = null): int
@@ -1906,6 +2247,31 @@ function audit_recent(int $limit = 30): array
     return $out;
 }
 
+/** Audit-Einträge eines Zeitraums (UTC, jeweils einschließlich), aufsteigend, mit entschlüsselten Details. */
+function audit_range(?string $fromUtc, ?string $toUtc): Generator
+{
+    $sql = 'SELECT * FROM ' . t('audit') . ' WHERE 1=1';
+    $args = [];
+    if ($fromUtc !== null) {
+        $sql .= ' AND ts >= ?';
+        $args[] = $fromUtc;
+    }
+    if ($toUtc !== null) {
+        $sql .= ' AND ts <= ?';
+        $args[] = $toUtc;
+    }
+    $q = db()->prepare($sql . ' ORDER BY seq ASC');
+    $q->execute($args);
+    foreach ($q as $r) {
+        try {
+            $r['details'] = json_decode(dec((string)$r['details_enc'], 'audit:' . $r['seq']), true, 32, JSON_THROW_ON_ERROR);
+        } catch (Throwable $e) {
+            $r['details'] = ['_error' => 'nicht entschlüsselbar'];
+        }
+        yield $r;
+    }
+}
+
 function audit_describe(string $action, array $d): string
 {
     $labels = [
@@ -1926,7 +2292,8 @@ function audit_describe(string $action, array $d): string
         'setting.circle_create' => 'Alarmkreis angelegt', 'setting.circle_update' => 'Alarmkreis geändert', 'setting.circle_delete' => 'Alarmkreis gelöscht',
         'setting.location_create' => 'Standort angelegt', 'setting.location_update' => 'Standort geändert', 'setting.location_delete' => 'Standort gelöscht',
         'setting.contact_create' => 'Kontakt angelegt', 'setting.contact_update' => 'Kontakt geändert', 'setting.contact_delete' => 'Kontakt gelöscht',
-        'setting.mail_prefix' => 'Betreff-Präfixe geändert',
+        'setting.mail_prefix' => 'Betreff-Präfixe geändert', 'setting.circle_channels' => 'Alarmkreis: Signal/GroupAlarm geändert',
+        'channel.alarm' => 'Alarm über Signal/GroupAlarm', 'audit.export' => 'Protokoll exportiert', 'monitor.cron_stale' => 'Warnung: Cron läuft nicht',
     ];
     $s = $labels[$action] ?? $action;
     $parts = [];
@@ -1941,6 +2308,14 @@ function audit_describe(string $action, array $d): string
     }
     if (!empty($d['circles']) && is_array($d['circles'])) {
         $parts[] = 'Kreise: ' . implode(', ', array_map('strval', $d['circles']));
+    }
+    if (!empty($d['channels']) && is_array($d['channels'])) {
+        foreach ($d['channels'] as $ch => $r) {
+            $parts[] = ($ch === 'signal' ? 'Signal' : 'GroupAlarm') . ': ' . (int)($r['ok'] ?? 0) . ' ok, ' . (int)($r['failed'] ?? 0) . ' fehlgeschlagen';
+        }
+    }
+    if (!empty($d['groupalarm']) && is_string($d['groupalarm'])) {
+        $parts[] = 'GroupAlarm-Szenario ' . $d['groupalarm'];
     }
     if (!empty($d['location_recipients'])) {
         $parts[] = 'Standortadressen: ' . (int)$d['location_recipients'];
@@ -1982,6 +2357,15 @@ function audit_describe(string $action, array $d): string
     }
     if (!empty($d['user'])) {
         $parts[] = 'Benutzer: ' . $d['user'];
+    }
+    if (!empty($d['format']) && is_string($d['format'])) {
+        $parts[] = 'Format ' . strtoupper($d['format']) . (!empty($d['range']) ? ', Zeitraum ' . $d['range'] : '') . (isset($d['with_ip']) ? ', IP-Adressen: ' . ($d['with_ip'] ? 'ja' : 'nein') : '');
+    }
+    if (isset($d['minutes']) && is_int($d['minutes'])) {
+        $parts[] = 'seit ' . $d['minutes'] . ' Minuten';
+    }
+    if (!empty($d['_error'])) {
+        $parts[] = 'Details nicht entschlüsselbar';
     }
     if (!empty($d['_ctx']['ip'])) {
         $parts[] = 'IP ' . $d['_ctx']['ip'];
@@ -2257,9 +2641,7 @@ function spec_needs_totp(array $spec): bool
     if (!empty($spec['alarm_mail'])) {
         return true;
     }
-    if ($spec['mode'] === 'end') {
-        return false;
-    }
+    // Beenden wie Setzen: Wer eine echte Warnung still beenden kann, erzeugt eine falsche Entwarnung.
     $def = bcm()['by_key'][$spec['key']] ?? null;
     return $def && $def['require_totp'];
 }
@@ -2350,7 +2732,8 @@ function parse_change_request(array $in, ?array $target): array
             $spec['circles'] = array_values(array_intersect(array_column(alarm_circles(), 'id'), array_map('strval', (array)($in['circles'] ?? []))));
             $spec['notify_locations'] = !empty($in['notify_loc']);
             [$to] = alarm_targets($spec, ['locations' => array_map(fn($i) => ['id' => $i], $spec['loc_ids'])]);
-            if (!$to) {
+            $ct = channel_targets($spec);
+            if (!$to && !($ct['signal'] && channel_enabled('signal')) && !($ct['groupalarm'] && channel_enabled('groupalarm'))) {
                 $errors[] = 'ALARM-Mail: Bitte mindestens einen Alarmkreis oder die Standortverwaltungen mit hinterlegten Adressen auswählen.';
             }
         }
@@ -2824,6 +3207,7 @@ function send_alarm_mail(string $kind, int $statusId, array $payload, ?string $v
             $sum[$k] += $r[$k];
         }
     }
+    $sum['channels'] = send_alarm_channels($kind, $statusId, $subject, $body, $author, $spec);
     audit('mail.alarm', 'status:' . $statusId, ['kind' => $kind, 'circles' => $circles, 'location_recipients' => $locCount,
         'recipients' => $sum['total'], 'ok' => $sum['ok'], 'failed' => $sum['failed']], $author, setting_level($author));
     return $sum;
@@ -3049,8 +3433,15 @@ function system_check(): array
     $chk((string)cfg('mail.transport') === 'smtp', 'Mailversand per SMTP (nicht nur Testmodus "log")');
     $chk((string)cfg('cron.token', '') !== '', 'Cron-Token gesetzt (für den Aufruf per URL)');
     $last = $dbOk ? (int)(kv_get('cron_last') ?? 0) : 0;
-    $chk($last > 0 && time() - $last < 1800, 'Cron läuft (letzter Lauf: ' . ($last ? fmt_local(gmdate('Y-m-d H:i:s', $last)) : 'noch nie') . ')');
+    $chk($last > 0 && !cron_stale(), 'Cron läuft (letzter Lauf: ' . ($last ? fmt_local(gmdate('Y-m-d H:i:s', $last)) : 'noch nie') . ')');
     if ($dbOk && $keyOk) {
+        $circ = alarm_circles();
+        if (array_filter($circ, fn($c) => $c['signal'])) {
+            $chk(channel_enabled('signal'), 'Signal: Empfänger hinterlegt, Gateway in config.local.inc.php ' . (channel_enabled('signal') ? 'eingerichtet' : 'NICHT eingerichtet (channels.signal)'));
+        }
+        if (array_filter($circ, fn($c) => $c['groupalarm'] !== '')) {
+            $chk(channel_enabled('groupalarm'), 'GroupAlarm: Szenario hinterlegt, Zugang in config.local.inc.php ' . (channel_enabled('groupalarm') ? 'eingerichtet' : 'NICHT eingerichtet (channels.groupalarm)'));
+        }
         $v = audit_verify();
         $chk($v['ok'], 'Protokoll-Kette ' . ($v['ok'] ? 'intakt' : 'DEFEKT: ' . $v['error']) . " ({$v['count']} Einträge, Kopf-Hash {$v['head']})");
     }
@@ -3155,11 +3546,17 @@ function nav(string $active, bool $showLogout = true): void
         echo '<a class="nav-link py-1 px-2' . ($active === $k ? ' active" aria-current="page' : '') . '" href="' . $href . '">' . $label . '</a>';
     }
     echo '</nav>';
+    $s2 = session_status() === PHP_SESSION_ACTIVE ? stage2_user() : null;
     if ($showLogout) {
         echo '<form method="post" action="index.php" class="m-0">' . csrf_field()
             . '<input type="hidden" name="action" value="logout"><button class="btn btn-outline-secondary btn-sm" type="submit">Abmelden</button></form>';
     }
     echo '</header>';
+    if ($s2 && cron_stale()) {
+        echo '<div class="alert alert-warning" role="alert"><strong>Cron läuft nicht</strong> (letzter Lauf vor ' . (int)cron_age_minutes()
+            . ' Minuten). Ohne Cron gibt es keine Erinnerungen und kein automatisches Ende von Meldungen. '
+            . ($s2['role'] === 'admin' ? 'Bitte den Cronjob beim Hoster prüfen (<a href="system.php">System</a>).' : 'Bitte einen Admin informieren.') . '</div>';
+    }
 }
 
 function alert_class(string $type): string

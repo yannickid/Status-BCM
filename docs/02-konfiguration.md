@@ -32,7 +32,8 @@ wieder hochladen. Vorher eine Kopie sichern.
 | `mail.recipients` | `[]` | frühere ALARM-Empfänger (Kreis "Allgemein"). Besser unter **System → Alarmkreise** pflegen |
 | `auth.max_failures` / `max_failures_user` / `window_seconds` | 5 / 10 / 900 | Brute-Force-Sperre je IP / je Benutzer |
 | `auth.idle_minutes` / `stage2_idle_minutes` / `absolute_hours` | 30 / 15 / 10 | Sitzungsdauer |
-| `auth.totp_enforce_all` | `false` | `true` = TOTP bei **jeder** Änderung, auch beim Beenden |
+| `auth.totp_enforce_all` | `false` | `true` = TOTP bei **jeder** Änderung, auch beim Beenden einer "Information" |
+| `auth.totp_at_login` | `true` | persönliche Kennungen brauchen beim Login den TOTP-Code (der gemeinsame Lesezugang nie). Nur in begründeten Ausnahmen abschalten |
 | `auth.password_max_age_days` | 365 | Gültigkeit persönlicher Passwörter; 0 = unbefristet |
 | `auth.password_remind_days` / `password_reminder_repeat_days` | 14 / 7 | Erinnerung vor Ablauf und deren Wiederholung |
 | `auth.password_min_length` | 12 | Mindestlänge (nie unter 12) |
@@ -44,6 +45,13 @@ wieder hochladen. Vorher eine Kopie sichern.
 | `reminder.anchor_mail` | `true` | täglicher Audit-Anker an `cc_default_mail1` |
 | `limits.max_validity_days` | 30 | höchste Gültigkeitsdauer einer Meldung |
 | `net.trusted_proxies` | `[]` | nur hinter einem Reverse-Proxy setzen |
+| `channels.signal.url` / `number` | – | Signal über eine eigene [signal-cli-rest-api](04-betrieb.md#signal-einrichten): volle Adresse von `/v2/send` und die registrierte Absendernummer |
+| `channels.signal.token` oder `user`/`pass` | – | Zugangsschutz des vorgeschalteten Proxys (Bearer-Token bzw. Basic-Auth) |
+| `channels.groupalarm.token` / `organization_id` | – / 0 | [GroupAlarm](04-betrieb.md#groupalarm-einrichten): Personal-Access-Token und Organisations-ID |
+| `channels.groupalarm.kinds` | `new`, `update`, `end` | bei welchen ALARM-Mails GroupAlarm mit auslöst |
+| `channels.transport` | wie `mail.transport` | `log` schreibt Signal/GroupAlarm-Aufrufe nur nach `storage/outbox` (Test) |
+| `monitor.cron_stale_minutes` / `warn_repeat_minutes` | 15 / 60 | Cron gilt nach 15 Minuten als ausgefallen; Warnmail an `cc_default_mail1` höchstens stündlich |
+| `monitor.health_token` | – | optional: `health.php` antwortet nur mit `?t=<token>` oder Header `X-Health-Token` |
 
 Geheimnisse können überall als `enc:v1:…` stehen (erzeugt mit `php setup.php encrypt-value '<wert>'`, optional).
 

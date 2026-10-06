@@ -103,6 +103,9 @@ es **keine Erinnerungsmails**.
 3. Die Antwort `ok` bedeutet: Der Lauf war erfolgreich. Unter **System** erscheint "Cron läuft" mit der Uhrzeit des
    letzten Laufs.
 
+Fällt der Cron später aus, warnt die Seite selbst (siehe [Betrieb → Überwachung](04-betrieb.md#überwachung)).
+Richten Sie dort auch gleich den externen Uptime-Check auf `health.php` ein.
+
 Die Adresse enthält ein Geheimnis. Tragen Sie sie nur beim Cron-Dienst ein. Wer sie kennt, kann nur den Cron auslösen
 (Erinnerungen, Aufräumen), aber nichts lesen oder ändern. Optional schränkt `cron.ip_allowlist` die Absender ein.
 
@@ -116,6 +119,8 @@ Die Adresse enthält ein Geheimnis. Tragen Sie sie nur beim Cron-Dienst ein. Wer
    `/setup.php`, `/storage/`, `/tests/`.
 4. Eine Meldung "Übung" mit ALARM-Mail setzen (siehe [Bedienung](03-bedienung.md)), Empfang prüfen und die Meldung
    wieder beenden.
+5. Optional Signal und GroupAlarm einrichten ([Betrieb](04-betrieb.md#weitere-alarmkanäle-signal-und-groupalarm)) und
+   den Aushang mit QR-Code drucken (**System → Aushang drucken**).
 
 ## 8. Sichern
 

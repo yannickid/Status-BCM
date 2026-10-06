@@ -35,6 +35,9 @@ file_put_contents($local, "<?php\nreturn " . var_export([
         'users' => ['anna' => ['name' => 'Anna Test', 'email' => 'anna@test.example',
             'hash' => password_hash('anna-passwort', PASSWORD_DEFAULT), 'totp_secret' => $secret]]],
     'cron' => ['token' => $cronToken],
+    'channels' => ['signal' => ['url' => 'https://signal.test/v2/send', 'number' => '+491700000000', 'token' => 'sig-geheim'],
+        'groupalarm' => ['token' => 'ga-geheim', 'organization_id' => 4711]],
+    'monitor' => ['health_token' => 'hc-token'],
 ], true) . ";\n");
 
 $port = random_int(20000, 40000);
@@ -73,7 +76,7 @@ try {
     ok($c === 302, 'status.php ohne Login -> Umleitung');
     [$c] = req('GET', "$base/change.php", [], $jar);
     ok($c === 302, 'change.php ohne Stufe 1 -> Umleitung');
-    foreach (['config.inc.php', 'lib.inc.php'] as $f) {
+    foreach (['config.inc.php', 'lib.inc.php', 'qr.inc.php', 'pdf.inc.php'] as $f) {
         [$c, , $b] = req('GET', "$base/$f");
         ok(in_array($c, [403, 404], true) && trim($b) === '', "$f liefert nichts aus ($c)");
     }
@@ -102,10 +105,15 @@ try {
     ok($c === 302 && str_contains($b, 'Anmeldung Stufe 2'), 'Gemeinsamer Zugang (Groß-/Kleinschreibung egal) führt nur zum Lesen');
     $jarA = $tmp . '/jarA.txt';
     [, , $b] = req('GET', "$base/index.php", [], $jarA);
-    [$c, $h] = req('POST', "$base/index.php", ['_csrf' => csrf($b), 'action' => 'login', 'user' => 'Anna', 'password' => 'anna-passwort'], $jarA);
+    [$c, , $b] = req('POST', "$base/index.php", ['_csrf' => csrf($b), 'action' => 'login', 'user' => 'Anna', 'password' => 'anna-passwort'], $jarA);
+    ok($c === 200 && str_contains($b, 'name="totp"') && str_contains($b, 'value="login_totp"'), 'Persönliche Kennung: nach dem Passwort wird der TOTP-Code verlangt');
+    [$c] = req('GET', "$base/status.php", [], $jarA);
+    ok($c === 302, 'Ohne TOTP-Code noch kein Zugriff auf die Statusseite');
+    // (falsche Codes zählen gemeinsam für die TOTP-Sperre; abgelehnte Codes prüfen Commit und Benutzerverwaltung)
+    [$c, $h] = req('POST', "$base/index.php", ['_csrf' => csrf($b), 'action' => 'login_totp', 'totp' => fresh_code($secret)], $jarA);
     [, , $b] = req('GET', "$base/change.php", [], $jarA);
     ok($c === 302 && ($h['location'] ?? '') === 'status.php' && str_contains($b, 'Neue Meldung') && str_contains($b, 'Angemeldet als Anna Test'),
-        'Persönliche Kennung auf der Startseite: direkt mit Einstellungen angemeldet');
+        'Persönliche Kennung auf der Startseite: mit TOTP direkt mit Einstellungen angemeldet');
     [$c, , $b] = req('GET', "$base/status.php", [], $jar);
     ok($c === 200 && str_contains($b, 'Regelbetrieb'), 'status.php zeigt Regelbetrieb');
 
@@ -115,8 +123,10 @@ try {
     $t = csrf($b);
     [, , $b] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'login2', 'user' => 'anna', 'password' => 'falsch'], $jar);
     ok(str_contains($b, 'Anmeldung fehlgeschlagen'), 'Falsches persönliches Passwort abgelehnt');
-    [$c] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'login2', 'user' => 'anna', 'password' => 'anna-passwort'], $jar);
-    ok($c === 302, 'Login Stufe 2 erfolgreich');
+    [$c, , $b] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'login2', 'user' => 'anna', 'password' => 'anna-passwort'], $jar);
+    ok($c === 200 && str_contains($b, 'value="login_totp"') && !str_contains($b, 'Neue Meldung'), 'Login Stufe 2 verlangt nach dem Passwort den TOTP-Code');
+    [$c] = req('POST', "$base/change.php", ['_csrf' => csrf($b), 'action' => 'login_totp', 'totp' => fresh_code($secret)], $jar);
+    ok($c === 302, 'Login Stufe 2 mit TOTP erfolgreich');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     $t = csrf($b);
     ok(str_contains($b, 'Neue Meldung') && str_contains($b, 'Angemeldet als Anna Test'), 'Formular nach Stufe 2 sichtbar');
@@ -185,12 +195,12 @@ try {
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     ok(str_contains($b, 'Aktuelle Meldungen (2)'), 'Einstellungen zeigen beide Meldungen zur Bearbeitung');
 
-    // Beenden (ohne TOTP)
+    // Beenden einer Warnung: TOTP wie beim Setzen
     req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'preview', 'mode' => 'end', 'target' => $tgt, 'note' => 'gelöst'], $jar);
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     preg_match('/name="pending_id" value="([0-9a-f]+)"/', $b, $m);
-    ok(!str_contains($b, 'name="totp"'), 'Beenden braucht kein TOTP');
-    req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'commit', 'pending_id' => $m[1] ?? ''], $jar);
+    ok(str_contains($b, 'name="totp"'), 'Beenden einer Warnung verlangt TOTP');
+    req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'commit', 'pending_id' => $m[1] ?? '', 'totp' => fresh_code($secret)], $jar);
     [, , $b2] = req('GET', "$base/status.php", [], $jar2);
     ok(!str_contains($b2, 'Regelbetrieb') && str_contains($b2, 'Zurückgenommen / gelöst') && str_contains($b2, 'status-gone'),
         'Beendete Meldung bleibt ausgegraut sichtbar, die andere gilt weiter');
@@ -270,6 +280,47 @@ try {
     ok(str_contains($b, 'Alarmkreis angelegt') && str_contains($b, 'Betreff-Präfixe geändert') && str_contains($b, 'Integrität der Protokollkette: OK'),
         'Systemänderungen im Protokoll');
 
+    /* --- Signal und GroupAlarm je Kreis --- */
+    [, , $b] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'circle_channels', 'id' => 'it', 'signal' => "0170 123", 'groupalarm' => '',
+        'totp' => fresh_code($secret)], $jar);
+    ok(str_contains($b, 'alert-danger'), 'Ungültige Signal-Nummer abgelehnt');
+    [$c] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'circle_channels', 'id' => 'it', 'signal' => "+49 170 1234567\ngroup.YWJjZGVmZ2hpams=",
+        'groupalarm' => '42', 'totp' => fresh_code($secret)], $jar);
+    [, , $b] = req('GET', "$base/system.php", [], $jar);
+    ok($c === 302 && str_contains($b, '2 Signal, GroupAlarm-Szenario 42') && !str_contains($b, '1234567'), 'Signal-Empfänger und GroupAlarm-Szenario gespeichert, Nummern maskiert');
+    [$c] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'signal_test', 'id' => 'it', 'totp' => fresh_code($secret)], $jar);
+    $sig = '';
+    foreach (glob($tmp . '/storage/outbox/*-signal-*.json') ?: [] as $f) {
+        $sig = (string)file_get_contents($f);
+    }
+    $sj = json_decode($sig, true) ?: [];
+    ok($c === 302 && ($sj['url'] ?? '') === 'https://signal.test/v2/send' && ($sj['body']['recipients'] ?? []) === ['+491701234567', 'group.YWJjZGVmZ2hpams=']
+        && !str_contains($sig, 'sig-geheim'), 'Signal-Testnachricht an signal-cli-rest-api übergeben, Token nicht im Ausgang');
+    ok(glob($tmp . '/storage/outbox/*-groupalarm-*.json') === [], 'Testnachricht löst kein GroupAlarm aus');
+
+    /* --- Aushang, Protokoll-Export, Gesundheitsprüfung --- */
+    [$c, , $b] = req('GET', "$base/aushang.php?kennung=1&hinweis=Passwort+im+Notfallordner", [], $jar);
+    ok($c === 200 && str_contains($b, 'class="qr-code aushang-qr" src="data:image/svg+xml;base64,') && str_contains($b, 'https://status.test/')
+        && str_contains($b, 'Benutzernamen <strong>zugang</strong>') && str_contains($b, 'Passwort im Notfallordner') && !str_contains($b, 'zugang-1234'),
+        'Aushang mit QR-Code, Adresse und Benutzername, ohne Passwort');
+    [$c] = req('GET', "$base/aushang.php", [], $jar2);
+    ok($c === 302, 'Aushang nur mit persönlicher Anmeldung');
+    [$c, $h, $csv] = req('POST', "$base/export.php", ['_csrf' => $t, 'format' => 'csv'], $jar);
+    ok($c === 200 && str_contains($h['content-type'] ?? '', 'text/csv') && str_contains($csv, 'Meldung gesetzt') && str_contains($csv, 'Integrität der Protokollkette: OK')
+        && !str_contains($csv, '127.0.0.1'), 'CSV-Export mit Integritätsprüfung, ohne IP-Adressen');
+    [$c, , $csv] = req('POST', "$base/export.php", ['_csrf' => $t, 'format' => 'csv', 'with_ip' => '1', 'from' => date('Y-m-d'), 'to' => date('Y-m-d')], $jar);
+    ok($c === 200 && str_contains($csv, '127.0.0.1'), 'CSV-Export auf Wunsch mit IP-Adressen');
+    [$c, $h, $pdf] = req('POST', "$base/export.php", ['_csrf' => $t, 'format' => 'pdf'], $jar);
+    ok($c === 200 && str_starts_with($pdf, '%PDF-1.4') && str_contains($h['content-type'] ?? '', 'application/pdf') && str_contains($pdf, '%%EOF'), 'PDF-Export');
+    [$c] = req('POST', "$base/export.php", ['_csrf' => $t, 'format' => 'csv'], $jar2);
+    ok($c === 302, 'Export nur für Admins');
+    [, , $b] = req('GET', "$base/change.php", [], $jar);
+    ok(str_contains($b, 'Protokoll exportiert') && str_contains($b, 'Integrität der Protokollkette: OK'), 'Export im Protokoll vermerkt');
+    [$c, , $b] = req('GET', "$base/health.php");
+    ok($c === 403, 'health.php ohne Token verboten (wenn Token gesetzt)');
+    [$c, , $b] = req('GET', "$base/health.php?t=hc-token");
+    ok($c === 503 && trim($b) === 'cron', 'health.php meldet 503, solange der Cron nie lief');
+
     /* --- Alarm-Mail im Ausgang (BCC) --- */
     $alarm = '';
     foreach (glob($tmp . '/storage/outbox/*.eml') ?: [] as $f) {
@@ -288,6 +339,8 @@ try {
     ok($c === 403, 'cron.php mit falschem Token verboten');
     [$c, , $b] = req('GET', "$base/cron.php", [], '', ['X-Cron-Token: ' . $cronToken]);
     ok($c === 200 && trim($b) === 'ok', 'cron.php mit Token-Header läuft');
+    [$c, , $b] = req('GET', "$base/health.php", [], '', ['X-Health-Token: hc-token']);
+    ok($c === 200 && trim($b) === 'ok', 'health.php meldet ok nach Cron-Lauf');
 
     /* --- Abmelden, Brute-Force-Sperre --- */
     [, , $b] = req('GET', "$base/status.php", [], $jar2);

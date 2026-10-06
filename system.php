@@ -25,6 +25,7 @@ if ($user['role'] !== 'admin') {
     exit;
 }
 
+monitor_tick();
 $errors = [];
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     csrf_verify();
@@ -53,7 +54,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         flash($sum['ok'] > 0 ? 'ok' : 'err', $sum['ok'] > 0 ? 'Testmail an ' . mask_email($user['email']) . ' übergeben. Bitte Posteingang prüfen.'
             : 'Testmail fehlgeschlagen. SMTP-Daten in config.local.inc.php prüfen (Fehlerdetails im Server-Fehlerlog).');
         redirect('system.php');
-    } elseif (!in_array($act, ['circle_create', 'circle_update', 'circle_delete', 'location_save', 'location_delete',
+    } elseif (!in_array($act, ['circle_create', 'circle_update', 'circle_delete', 'circle_channels', 'signal_test', 'location_save', 'location_delete',
         'contact_save', 'contact_delete', 'prefix', 'cc1', 'stage1', 'stage1_user'], true)) {
         $errors[] = 'Ungültige Aktion.';
     } elseif ($err = admin_totp_check($user, 'system', $act)) {
@@ -67,6 +68,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             'contact_save' => 'Kontakt gespeichert.', 'contact_delete' => 'Kontakt gelöscht.',
             'prefix' => 'Betreff-Präfixe gespeichert.', 'cc1' => 'Kopie-Adresse gespeichert.',
             'stage1_user' => 'Benutzername des gemeinsamen Zugangs geändert. Bitte allen Beschäftigten bekannt geben.',
+            'circle_channels' => 'Signal/GroupAlarm des Kreises gespeichert.', 'signal_test' => 'Signal-Testnachricht übergeben. Bitte Empfang prüfen.',
             'stage1' => 'Zugangspasswort geändert. Bitte allen Beschäftigten auf dem üblichen internen Weg bekannt geben.',
         ][$act];
         $del = ($_POST['confirm'] ?? '') === 'ja';
@@ -76,6 +78,23 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 break;
             case 'circle_update':
                 $err = circle_update($id, (string)($_POST['emails'] ?? ''), $rm, $user['id'], $how);
+                break;
+            case 'circle_channels':
+                $err = circle_channels_set($id, (string)($_POST['signal'] ?? ''), array_map('intval', (array)($_POST['rm_sig'] ?? [])),
+                    (string)($_POST['groupalarm'] ?? ''), $user['id'], $how);
+                break;
+            case 'signal_test':
+                $c = array_column(alarm_circles(), null, 'id')[$id] ?? null;
+                if (!$c || !$c['signal']) {
+                    $err = 'Für diesen Kreis sind keine Signal-Empfänger hinterlegt.';
+                } elseif (!channel_enabled('signal')) {
+                    $err = 'Signal ist in config.local.inc.php nicht eingerichtet (channels.signal).';
+                } else {
+                    $r = send_alarm_channels('test', 0, 'Testnachricht ' . (string)cfg('app.title', 'Status'),
+                        "Diese Testnachricht bestätigt, dass die Alarmierung über Signal für den Kreis \"" . $c['name'] . "\" funktioniert.",
+                        $user['id'], ['circles' => [$id]]);
+                    $err = ($r['signal'][1] ?? 1) > 0 ? 'Signal-Testnachricht fehlgeschlagen (Details im Server-Fehlerlog).' : null;
+                }
                 break;
             case 'circle_delete':
                 $err = $del ? circle_delete($id, $user['id'], $how) : 'Bitte das Löschen bestätigen.';
@@ -145,6 +164,14 @@ echo $token !== '' ? '<div class="font-monospace small break-all border rounded 
     : '<div class="alert alert-warning small">Kein Cron-Token gesetzt (cron.token in config.local.inc.php).</div>';
 echo '<form method="post" action="system.php" class="d-grid d-sm-block">' . csrf_field() . '<input type="hidden" name="action" value="cron_run">'
     . '<button class="btn btn-outline-secondary btn-sm" type="submit">Jetzt einmal ausführen</button></form>';
+$age = cron_age_minutes();
+echo '<p class="small mt-2 mb-1">Letzter Lauf: ' . ($age === null ? 'noch nie' : 'vor ' . $age . ' Minuten')
+    . (cron_stale() ? ' <span class="badge text-bg-warning">überfällig</span>' : '') . '. Läuft der Cron länger als '
+    . max(5, (int)cfg('monitor.cron_stale_minutes', 15)) . ' Minuten nicht, geht eine Warnmail an die Kopie-Adresse (höchstens stündlich) und angemeldete Nutzer sehen einen Hinweis.</p>';
+$healthUrl = rtrim((string)cfg('app.base_url'), '/') . '/health.php' . ((string)cfg('monitor.health_token', '') !== '' ? '?t=' . (string)cfg('monitor.health_token') : '');
+echo '<p class="small mb-1">Externe Überwachung (z. B. UptimeRobot, Uptime Kuma): diese Adresse alle 5 Minuten abfragen. '
+    . 'Antwort 200 "ok" = Seite, Datenbank und Cron in Ordnung, sonst 503 mit Grund. Alarm des Dienstes bitte an eine Adresse außerhalb der eigenen Mail-Infrastruktur (z. B. SMS/App).</p>'
+    . '<div class="font-monospace small break-all border rounded p-2 bg-body">' . h($healthUrl) . '</div>';
 echo '</div></div>';
 
 /** Liste maskierter Adressen mit Auswahl zum Entfernen (Positionen als rm[]). */
@@ -176,7 +203,10 @@ $circles = alarm_circles();
 $stored = is_array(setting_get('circles'));
 echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Alarmkreise (' . count($circles) . ')</h2>';
 echo '<p class="small text-body-secondary">Beim Setzen einer Meldung wählen Sie, welche Kreise die ALARM-Mail erhalten, z. B. IT, BOA/Krisenstab, Leitung. '
-    . 'Versand ausschließlich per BCC. Adressen werden verschlüsselt gespeichert und nur maskiert angezeigt.</p>';
+    . 'Versand ausschließlich per BCC. Adressen werden verschlüsselt gespeichert und nur maskiert angezeigt.</p>'
+    . '<p class="small">Weitere Kanäle: Signal ' . (channel_enabled('signal') ? '<span class="badge text-bg-success">eingerichtet</span>' : '<span class="badge text-bg-secondary">nicht eingerichtet</span>')
+    . ' · GroupAlarm ' . (channel_enabled('groupalarm') ? '<span class="badge text-bg-success">eingerichtet</span>' : '<span class="badge text-bg-secondary">nicht eingerichtet</span>')
+    . ' <span class="text-body-secondary">(Zugangsdaten in config.local.inc.php, siehe Doku)</span></p>';
 if (!$stored && $circles[0]['emails']) {
     echo '<div class="alert alert-info small">Die bisherigen ALARM-Empfänger stehen im Kreis "Allgemein". Mit der ersten Änderung werden sie in die Kreisverwaltung übernommen.</div>';
 }
@@ -190,6 +220,27 @@ foreach ($circles as $n => $c) {
         . '<label class="form-label small" for="ce' . $sfx . '">Adressen hinzufügen (eine je Zeile)</label>'
         . '<textarea class="form-control mb-2" id="ce' . $sfx . '" name="emails" rows="2"></textarea>'
         . totp_input('u' . $sfx) . '<button class="btn btn-sm btn-primary" type="submit">Speichern</button></form>';
+    $sigList = '';
+    foreach ($c['signal'] as $i => $r) {
+        $sigList .= '<div class="form-check"><input class="form-check-input" type="checkbox" name="rm_sig[]" value="' . (int)$i . '" id="rs' . $sfx . '_' . (int)$i . '">'
+            . '<label class="form-check-label small font-monospace" for="rs' . $sfx . '_' . (int)$i . '">' . h(mask_phone($r)) . '</label></div>';
+    }
+    echo '<details class="mt-2"><summary class="small">Signal und GroupAlarm (' . count($c['signal']) . ' Signal'
+        . ($c['groupalarm'] !== '' ? ', GroupAlarm-Szenario ' . h($c['groupalarm']) : '') . ')</summary>'
+        . '<form method="post" action="system.php" class="mt-2" autocomplete="off">' . csrf_field()
+        . '<input type="hidden" name="action" value="circle_channels"><input type="hidden" name="id" value="' . h($c['id']) . '">'
+        . ($sigList !== '' ? '<fieldset class="mb-2"><legend class="small mb-1">Signal-Empfänger (maskiert), Haken = entfernen</legend>' . $sigList . '</fieldset>' : '')
+        . '<label class="form-label small" for="cs' . $sfx . '">Signal-Empfänger hinzufügen: Rufnummer +49… oder Gruppen-ID group.… (eine je Zeile)</label>'
+        . '<textarea class="form-control mb-2" id="cs' . $sfx . '" name="signal" rows="2"></textarea>'
+        . '<label class="form-label small" for="cg' . $sfx . '">GroupAlarm-Szenario-ID (leer = kein GroupAlarm)</label>'
+        . '<input class="form-control mb-2" id="cg' . $sfx . '" name="groupalarm" inputmode="numeric" maxlength="12" value="' . h($c['groupalarm']) . '">'
+        . totp_input('ch' . $sfx) . '<button class="btn btn-sm btn-primary" type="submit">Speichern</button></form>';
+    if ($c['signal']) {
+        echo '<form method="post" action="system.php" class="mt-2" autocomplete="off">' . csrf_field()
+            . '<input type="hidden" name="action" value="signal_test"><input type="hidden" name="id" value="' . h($c['id']) . '">'
+            . totp_input('st' . $sfx) . '<button class="btn btn-sm btn-outline-secondary" type="submit">Signal-Testnachricht an diesen Kreis</button></form>';
+    }
+    echo '</details>';
     echo delete_form('circle_delete', $c['id'], $sfx, 'Kreis');
     echo '</details>';
 }
@@ -291,6 +342,19 @@ echo '<form method="post" action="system.php" autocomplete="off">' . csrf_field(
     . '<label class="form-label small" for="p2">Wiederholen</label><input class="form-control mb-2" id="p2" type="password" name="pw2" autocomplete="new-password" required>'
     . totp_input('s1') . '<button class="btn btn-sm btn-primary" type="submit">Ändern</button></form>';
 echo '</div></div>';
+
+/* Protokoll-Export und Aushang */
+echo '<div class="card shadow-sm mb-3" id="export"><div class="card-body"><h2 class="h5">Protokoll-Export (Revision, ISB)</h2>'
+    . '<p class="small">Export des Änderungsprotokolls mit Integritätsprüfung und Kopf-Hash. Der Export wird selbst protokolliert. '
+    . 'Die Datei enthält personenbezogene Daten: nur verschlüsselt weitergeben und nach Zweck löschen.</p>'
+    . '<form method="post" action="export.php" autocomplete="off">' . csrf_field()
+    . '<div class="row g-2"><div class="col-6"><label class="form-label small" for="exf">von (leer = Beginn)</label><input class="form-control" type="date" id="exf" name="from"></div>'
+    . '<div class="col-6"><label class="form-label small" for="ext">bis (leer = heute)</label><input class="form-control" type="date" id="ext" name="to"></div></div>'
+    . '<div class="form-check mt-2"><input class="form-check-input" type="checkbox" name="with_ip" value="1" id="exip">'
+    . '<label class="form-check-label small" for="exip">IP-Adressen mit exportieren (nur wenn für den Zweck nötig)</label></div>'
+    . '<div class="d-flex flex-wrap gap-2 mt-2"><button class="btn btn-outline-primary btn-sm" type="submit" name="format" value="csv">CSV herunterladen</button>'
+    . '<button class="btn btn-outline-primary btn-sm" type="submit" name="format" value="pdf">PDF herunterladen</button></div></form>'
+    . '<p class="small mt-3 mb-0">Aushang mit QR-Code für Schwarzes Brett und Notfallordner: <a href="aushang.php">Aushang drucken</a></p></div></div>';
 
 /* Testmail */
 echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Mailversand testen</h2>';

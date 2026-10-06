@@ -6,7 +6,8 @@
 | [2. Konfiguration](02-konfiguration.md) | Betrieb, Redaktion | alle Einstellungen, Status-Katalog `config.json`, Regeln für Meldungstexte |
 | [3. Bedienung](03-bedienung.md) | alle | Meldungen abrufen, setzen, verlängern, ändern, beenden, Benutzer und System (Admins), Kurzkarte |
 | [4. Betrieb](04-betrieb.md) | Betrieb, Admins | Routineaufgaben, was wo erledigt wird, Update, Backup, Notfälle (inkl. Notfallzugang), nginx, DB-Rechte |
-| [5. Sicherheit und Audit](05-sicherheit-und-audit.md) | ISB, Revision | Schutzbedarf, Maßnahmen nach IT-Grundschutz, Protokollierung, Kryptografie, Restrisiken, Prüfanleitung |
+| [5. Sicherheit und Audit](05-sicherheit-und-audit.md) | ISB, Revision | Schutzbedarf, Maßnahmen nach IT-Grundschutz, Protokollierung, Kryptografie, **wo was wie gespeichert ist**, Restrisiken, Prüfanleitung |
+| [6. Governance](06-governance.md) | ISB, DSB, ISMS, BCM | Strukturanalyse, Schutzbedarfsfeststellung, Modellierung, IT-Sicherheitskonzept, Risikoanalyse nach BSI 200-3, BCM nach 200-4, Rollen, Datenschutz (VVT, TOM, DSFA-Schwellwert, AVV, Löschkonzept) |
 
 Schnelleinstieg: Beschäftigte brauchen nur [Bedienung → Status abrufen](03-bedienung.md#für-alle-beschäftigten-status-abrufen).
 

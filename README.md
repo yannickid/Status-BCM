@@ -18,8 +18,8 @@ erreichbar, wenn Netzwerk, Telefon oder Mail im Haus gestört sind.
 
 ## Was es kann
 
-* **Ein Anmeldeformular, zwei Stufen:** gemeinsamer Benutzername + Zugangspasswort zum Lesen, persönliche Kennung zum
-  Ändern (kritische Änderungen zusätzlich mit TOTP).
+* **Ein Anmeldeformular, zwei Stufen:** gemeinsamer Benutzername + Zugangspasswort zum Lesen, persönliche Kennung
+  mit TOTP-Code zum Ändern (kritische Änderungen und das Beenden echter Warnungen zusätzlich je Aktion mit TOTP).
 * **Keine Falschmeldungen:** nur freigegebene, pressetaugliche Textbausteine; immer Vorschau → verbindlich setzen;
   TOTP-Bestätigung bei ALARM-Mail und kritischen Status; kritische Begriffe ("Ausfall", "Angriff", …) werden
   blockiert.
@@ -30,6 +30,12 @@ erreichbar, wenn Netzwerk, Telefon oder Mail im Haus gestört sind.
 * **ALARM-Mail** per BCC an gewählte **Alarmkreise** (z. B. IT, BOA/Krisenstab, Leitung) und die Standortverwaltung
   der betroffenen Außenstellen, mit einstellbarem Betreff-Präfix für neu, Aktualisierung und Ende. Die Adressen sind
   verschlüsselt und nirgends im Klartext sichtbar.
+* **Weitere Alarmkanäle:** zusätzlich **Signal** (über eine eigene signal-cli-rest-api) und **GroupAlarm** je
+  Alarmkreis, damit die Alarmierung auch ohne die eigene Mail-Infrastruktur ankommt.
+* **Selbstüberwachung:** Warnung bei Cron-Ausfall (Hinweis, Prüfung, Warnmail) und `health.php` für einen externen
+  Uptime-Check.
+* **Aushang:** druckbare A4-Seite mit QR-Code zur Statusseite für Schwarzes Brett und Notfallordner.
+* **Protokoll-Export** als CSV und PDF für Revision und ISB, mit Integritätsprüfung und Kopf-Hash.
 * **Revisionssicheres Protokoll:** wer, was, wann, wie; Hash-Kette mit HMAC, append-only per DB-Trigger, täglicher
   Audit-Anker per Mail.
 * **Verschlüsselte Ablage** (AES-256-GCM) von Meldungen, Standortdaten, Mail-Inhalten, Protokolldetails und
@@ -63,7 +69,8 @@ Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-install
 | [Konfiguration](docs/02-konfiguration.md) | alle Einstellungen, Status-Katalog, Regeln für Meldungstexte |
 | [Bedienung](docs/03-bedienung.md) | für Beschäftigte, Redaktion und Admins, mit Notfall-Kurzkarte |
 | [Betrieb](docs/04-betrieb.md) | Routine, Updates, Backup, Notfälle, nginx, DB-Härtung |
-| [Sicherheit und Audit](docs/05-sicherheit-und-audit.md) | Schutzbedarf, Maßnahmen nach BSI IT-Grundschutz, Protokollierung, Restrisiken, Prüfanleitung |
+| [Sicherheit und Audit](docs/05-sicherheit-und-audit.md) | Schutzbedarf, Maßnahmen nach BSI IT-Grundschutz, Protokollierung, wo was wie gespeichert und verschlüsselt ist, Restrisiken, Prüfanleitung |
+| [Governance](docs/06-governance.md) | Unterlagen für BSI-Grundschutz, ISB, ISMS (Strukturanalyse, Schutzbedarfsfeststellung, IT-Sicherheitskonzept, Risikoanalyse), BCM und Datenschutz |
 
 ## Aufbau
 
@@ -73,7 +80,11 @@ Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-install
 | `status.php` | aktueller Status |
 | `change.php` | Login Stufe 2, Meldungen setzen, verlängern, ändern, beenden (Formular → Vorschau → verbindlich), Verlauf, Protokoll, Nutzung, eigenes Passwort |
 | `admin.php` | Benutzerverwaltung (nur Admins) |
-| `system.php` | System (nur Admins): Prüfung, Cron-Adresse, Alarmkreise, Standorte mit E-Mail der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse, Zugangspasswort, Testmail |
+| `system.php` | System (nur Admins): Prüfung, Cron-Adresse, Alarmkreise mit Signal/GroupAlarm, Standorte mit E-Mail der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse, Zugangspasswort, Protokoll-Export, Testmail |
+| `aushang.php` | druckbarer Aushang mit QR-Code (persönliche Anmeldung) |
+| `export.php` | Protokoll-Export CSV/PDF (nur Admins) |
+| `health.php` | Gesundheitsprüfung für externe Uptime-Dienste (200 `ok` / 503) |
+| `pdf.inc.php` | kleiner PDF-Schreiber für den Export (ohne Bibliotheken) |
 | `install.php` | Einrichtungsassistent (sperrt sich nach der Einrichtung) und Notfallzugang |
 | `qr.inc.php` | QR-Code als SVG für die Authenticator-App (ohne externe Dienste) |
 | `cron.php` | Erinnerungen, Passwort-Erinnerungen, Audit-Anker, Aufräumen (CLI oder URL mit Token) |

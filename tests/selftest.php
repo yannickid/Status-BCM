@@ -25,12 +25,15 @@ file_put_contents($local, "<?php\nreturn " . var_export([
     'auth' => ['users' => ['anna' => ['name' => 'Anna Test', 'email' => 'anna@test.example',
         'hash' => password_hash('pw', PASSWORD_DEFAULT), 'totp_secret' => $totpSecret]]],
     'reminder' => ['repeat_minutes' => 60, 'max_count' => 3],
+    'channels' => ['signal' => ['url' => 'https://signal.test/v2/send', 'number' => '+491700000000', 'token' => 'sig-geheim'],
+        'groupalarm' => ['token' => 'ga-geheim', 'organization_id' => 4711]],
 ], true) . ";\n");
 putenv('SBCM_LOCAL_CONFIG=' . $local);
 
 define('SBCM', true);
 require __DIR__ . '/../lib.inc.php';
 require __DIR__ . '/../qr.inc.php';
+require __DIR__ . '/../pdf.inc.php';
 date_default_timezone_set('UTC');
 
 function b32_for_test(): string
@@ -145,7 +148,9 @@ $resB2 = status_create($upd, 'anna');
 $b2 = array_values(array_filter(status_board()['live'], fn($r) => $r['msg'] === $resB['id']));
 ok(count($b2) === 1 && $b2[0]['payload']['locations'][0]['id'] === 'ber-nord', 'Ändern: Standorte einer Meldung angepasst');
 [$end, $ee] = parse_change_request(['mode' => 'end'], status_target($resB2['id']));
-ok($end !== null && !spec_needs_totp($end), 'Beenden ohne ALARM-Mail braucht keinen TOTP-Code');
+ok($end !== null && spec_needs_totp($end), 'Beenden einer Meldung der Stufe "Hinweis" verlangt TOTP wie das Setzen');
+ok(!spec_needs_totp(['mode' => 'end', 'key' => 'HINWEIS']) && spec_needs_totp(['mode' => 'end', 'key' => 'STANDORT_GESPERRT']),
+    'Beenden: "Information" ohne TOTP, "Wichtiger Hinweis" mit TOTP');
 status_end($resB2['id'], 'anna', [], 'gelöst');
 $bd = status_board();
 ok(count($bd['live']) === 1 && count($bd['recent']) === 1 && $bd['recent'][0]['gone'] === 'ended' && $bd['recent'][0]['mac_ok'],
@@ -360,6 +365,52 @@ ok(str_starts_with($plain($latest), '[NOTFALL] Statusmeldung') && str_contains($
 ok(str_starts_with($plain($endMail), '[Entwarnung] Statusmeldung beendet') && str_contains($plain($endMail), 'nicht mehr gültig'), 'Ende-Mail mit eigenem Präfix');
 $lastMail = db()->query('SELECT result_enc FROM ' . t('mail_log') . " WHERE kind = 'alarm'")->fetchColumn();
 ok(!str_contains((string)$lastMail, 'geheim1') && str_contains(dec((string)$lastMail, 'mail.result'), 'g******@z***.example'), 'Protokoll speichert nur maskierte Adressen, verschlüsselt');
+
+/* --- Weitere Alarmkanäle: Signal, GroupAlarm --- */
+ok(signal_recipient('+49 170 123-4567') === '+491701234567' && signal_recipient('0049 (171) 7654321') === '+491717654321'
+    && signal_recipient('0170 1234567') === null && signal_recipient('group.abc') === null && signal_recipient('group.YWJjZGVmZ2hpams=') === 'group.YWJjZGVmZ2hpams=',
+    'Signal-Empfänger: internationale Rufnummer oder Gruppen-ID, sonst abgelehnt');
+ok(mask_phone('+491701234567') === '+491*******67' && !str_contains(mask_phone('+491701234567'), '1234'), 'Rufnummern nur maskiert');
+ok(circle_channels_set('it', "+49 170 1234567\n0170 kaputt", [], '', 'system:test') !== null, 'Ungültige Signal-Nummer: nichts gespeichert');
+ok(circle_channels_set('it', "+49 170 1234567\n+49 171 7654321", [], '42', 'system:test') === null
+    && circle_channels_set('boa-krisenstab', '+49 170 1234567', [], 'x1', 'system:test') !== null, 'Signal und GroupAlarm-Szenario je Kreis, Szenario nur numerisch');
+$ct = channel_targets(['circles' => ['it', 'allgemein']]);
+ok($ct['signal'] === ['+491701234567', '+491717654321'] && array_keys($ct['groupalarm']) === [42], 'Kanalziele aus den gewählten Kreisen');
+ok(!str_contains((string)kv_get('set:circles'), '1701234567'), 'Signal-Nummern verschlüsselt gespeichert');
+array_map('unlink', glob(storage_dir() . '/outbox/*.json') ?: []);
+$rt = send_alarm_channels('test', 0, 'Test', 'Text', 'system:test', ['circles' => ['it']]);
+ok($rt === ['signal' => [2, 0]] && count(glob(storage_dir() . '/outbox/*-groupalarm-*.json') ?: []) === 0, 'Testnachricht nur über Signal, kein GroupAlarm');
+$rc = send_alarm_channels('new', (int)$resM['id'], '[NOTFALL] Statusmeldung', 'Bitte Hinweise beachten.', 'anna', ['circles' => ['it']]);
+$ga = json_decode((string)file_get_contents((glob(storage_dir() . '/outbox/*-groupalarm-*.json') ?: [''])[0]), true) ?: [];
+$sg = (string)file_get_contents((glob(storage_dir() . '/outbox/*-signal-*.json') ?: [''])[0]);
+ok($rc === ['signal' => [2, 0], 'groupalarm' => [1, 0]] && ($ga['body']['scenarioID'] ?? 0) === 42 && ($ga['body']['organizationID'] ?? 0) === 4711
+    && ($ga['headers'] ?? []) === ['Personal-Access-Token: ***'], 'Alarm über Signal und GroupAlarm (Szenario, Organisation), Token nicht im Ausgang');
+ok(str_contains($sg, '"message": "[NOTFALL] Statusmeldung') && !str_contains($sg, 'sig-geheim'), 'Signal-Nachricht = Betreff + Text, Token geschwärzt');
+ok(in_array('channel.alarm', db()->query('SELECT action FROM ' . t('audit'))->fetchAll(PDO::FETCH_COLUMN), true), 'Kanal-Alarm protokolliert (nur Anzahlen)');
+ok(http_post_json('http://extern.example/x', [], []) === [0, '', 'nur https:// erlaubt'], 'Kanäle nur über https');
+
+/* --- Selbstüberwachung --- */
+kv_set('cron_last', (string)(time() - 3 * 60));
+ok(!cron_stale() && cron_age_minutes() === 3, 'Cron vor 3 Minuten: in Ordnung');
+kv_set('cron_last', (string)(time() - 20 * 60));
+ok(cron_stale(), 'Cron seit 20 Minuten nicht gelaufen: überfällig');
+monitor_tick();
+monitor_tick();
+ok((int)db()->query('SELECT COUNT(*) FROM ' . t('mail_log') . " WHERE kind = 'monitor'")->fetchColumn() === 1, 'Warnmail bei Cron-Ausfall, höchstens einmal je Stunde');
+kv_set('cron_last', (string)time());
+
+/* --- Protokoll-Export --- */
+$all = iterator_to_array(audit_range(null, null), false);
+ok(count($all) === audit_verify()['count'] && count(iterator_to_array(audit_range('2000-01-01 00:00:00', '2000-12-31 23:59:59'), false)) === 0,
+    'Export-Zeitraum: alle bzw. keine Einträge');
+$pdf = pdf_table('Änderungsprotokoll', ['Kopf-Hash x'], [['Nr.', 40], ['Beschreibung', 700]],
+    array_map(fn($i) => [(string)$i, str_repeat('Längerer Text mit Umlauten äöü ß → ', 5)], range(1, 150)));
+ok(str_starts_with($pdf, '%PDF-1.4') && str_ends_with($pdf, "%%EOF\n") && str_contains($pdf, "\xC4nderungsprotokoll") && preg_match('#/Count (\d+)#', $pdf, $pm) && (int)$pm[1] > 1,
+    'PDF: mehrseitig, Umlaute in Windows-1252');
+preg_match('/startxref\n(\d+)/', $pdf, $xm);
+preg_match_all('/^(\d{10}) 00000 n $/m', $pdf, $offs);
+ok(substr($pdf, (int)$xm[1], 4) === 'xref' && array_reduce(array_keys($offs[1]), fn($c, $i) => $c && str_starts_with(substr($pdf, (int)$offs[1][$i]), ($i + 1) . ' 0 obj'), true),
+    'PDF: Querverweistabelle stimmt');
 
 /* --- Nutzung: Lesezähler und Login-Statistik --- */
 $sid = (int)$resM['id'];
