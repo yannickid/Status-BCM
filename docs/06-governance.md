@@ -373,8 +373,8 @@ Master-Key als kompromittiert behandeln (Neuinstallation, alle Passwörter und T
 * **NIS2 / KRITIS:** Fällt die Organisation darunter, gelten eigene Melde- und Nachweispflichten gegenüber dem BSI.
   Status-BCM ist **kein** Meldeweg an Behörden; es unterstützt die interne Krisenkommunikation und liefert mit
   Protokoll und Export Nachweise für das Notfallmanagement.
-* **Barrierefreiheit:** schlanke HTML-Seite ohne JavaScript, mit Bootstrap; eine formale Prüfung (z. B. nach
-  BITV 2.0 bei öffentlichen Stellen) ist **[Betreiber]**.
+* **Barrierefreiheit:** Stand nach WCAG 2.1 AA, bekannte Grenzen und Vorlage für die Erklärung in
+  [Barrierefreiheit](07-barrierefreiheit.md); eine Prüfung mit Screenreader bzw. ein BITV-Test ist **[Betreiber]**.
 
 ## 10. Audit-Mappe (Checkliste)
 

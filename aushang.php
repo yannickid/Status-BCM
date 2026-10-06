@@ -51,7 +51,7 @@ echo '<label class="form-label mt-2" for="ah">Zusätzlicher Hinweis (optional, m
 
 echo '<section class="aushang card"><div class="card-body text-center">';
 echo '<p class="aushang-kicker">Im Notfall und bei IT-Störungen</p>';
-echo '<h1 class="aushang-title">' . h($title) . '</h1>';
+echo '<h2 class="aushang-title">' . h($title) . '</h2>';
 echo '<p class="aushang-lead">Aktuelle Lage, Hinweise und Ansprechpartner – auch vom privaten Smartphone abrufbar.</p>';
 echo '<img class="qr-code aushang-qr" src="' . h(qr_svg_data_uri($url)) . '" alt="QR-Code zur Statusseite" width="320" height="320">';
 echo '<p class="aushang-url break-all">' . h($url) . '</p>';

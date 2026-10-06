@@ -142,7 +142,7 @@ if (is_installed()) {
     }
     http_response_code(403);
     inst_head('Einrichtung abgeschlossen');
-    echo '<div class="alert alert-success">Die Einrichtung ist abgeschlossen. Dieser Assistent ist gesperrt.</div>'
+    echo '<h1 class="h4">Einrichtung abgeschlossen</h1><div class="alert alert-success">Die Einrichtung ist abgeschlossen. Dieser Assistent ist gesperrt.</div>'
         . '<p>Änderungen nehmen Admins nach der Anmeldung unter <strong>System</strong> und <strong>Benutzer</strong> vor. '
         . 'Die Datei <code>install.php</code> kann vom Webspace gelöscht werden.</p><p><a class="btn btn-primary" href="index.php">Zur Anmeldung</a></p>';
     page_end();

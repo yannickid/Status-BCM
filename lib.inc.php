@@ -10,7 +10,7 @@ if (!defined('SBCM')) {
     exit;
 }
 
-const SBCM_VERSION = '1.4.0';
+const SBCM_VERSION = '1.4.1';
 define('SBCM_ZERO', str_repeat('0', 64));
 
 /* ====================================================================== */
@@ -3534,6 +3534,7 @@ function page_end(): void
 
 function nav(string $active, bool $showLogout = true): void
 {
+    echo '<a class="visually-hidden-focusable" href="#inhalt">Zum Inhalt springen</a>';
     echo '<header class="d-flex flex-wrap align-items-center gap-2 mb-3 pb-2 border-bottom">';
     echo '<p class="app-title fw-bold me-auto">' . h((string)cfg('app.title', 'Status')) . '</p>';
     echo '<nav class="nav nav-pills">';
@@ -3551,7 +3552,7 @@ function nav(string $active, bool $showLogout = true): void
         echo '<form method="post" action="index.php" class="m-0">' . csrf_field()
             . '<input type="hidden" name="action" value="logout"><button class="btn btn-outline-secondary btn-sm" type="submit">Abmelden</button></form>';
     }
-    echo '</header>';
+    echo '</header><div id="inhalt" tabindex="-1"></div>';
     if ($s2 && cron_stale()) {
         echo '<div class="alert alert-warning" role="alert"><strong>Cron läuft nicht</strong> (letzter Lauf vor ' . (int)cron_age_minutes()
             . ' Minuten). Ohne Cron gibt es keine Erinnerungen und kein automatisches Ende von Meldungen. '

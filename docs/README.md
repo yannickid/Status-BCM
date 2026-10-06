@@ -8,6 +8,7 @@
 | [4. Betrieb](04-betrieb.md) | Betrieb, Admins | Routineaufgaben, was wo erledigt wird, Update, Backup, Notfälle (inkl. Notfallzugang), nginx, DB-Rechte |
 | [5. Sicherheit und Audit](05-sicherheit-und-audit.md) | ISB, Revision | Schutzbedarf, Maßnahmen nach IT-Grundschutz, Protokollierung, Kryptografie, **wo was wie gespeichert ist**, Restrisiken, Prüfanleitung |
 | [6. Governance](06-governance.md) | ISB, DSB, ISMS, BCM | Strukturanalyse, Schutzbedarfsfeststellung, Modellierung, IT-Sicherheitskonzept, Risikoanalyse nach BSI 200-3, BCM nach 200-4, Rollen, Datenschutz (VVT, TOM, DSFA-Schwellwert, AVV, Löschkonzept) |
+| [7. Barrierefreiheit](07-barrierefreiheit.md) | ISB, Schwerbehindertenvertretung, Betreiber | geprüfter Stand nach WCAG 2.1 AA / BITV 2.0, bekannte Grenzen, Vorlage für die Erklärung zur Barrierefreiheit |
 
 Schnelleinstieg: Beschäftigte brauchen nur [Bedienung → Status abrufen](03-bedienung.md#für-alle-beschäftigten-status-abrufen).
 

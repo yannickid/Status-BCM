@@ -70,6 +70,7 @@ Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-install
 | [Bedienung](docs/03-bedienung.md) | für Beschäftigte, Redaktion und Admins, mit Notfall-Kurzkarte |
 | [Betrieb](docs/04-betrieb.md) | Routine, Updates, Backup, Notfälle, nginx, DB-Härtung |
 | [Sicherheit und Audit](docs/05-sicherheit-und-audit.md) | Schutzbedarf, Maßnahmen nach BSI IT-Grundschutz, Protokollierung, wo was wie gespeichert und verschlüsselt ist, Restrisiken, Prüfanleitung |
+| [Barrierefreiheit](docs/07-barrierefreiheit.md) | Stand nach WCAG 2.1 AA / BITV 2.0, Grenzen, Vorlage für die Erklärung |
 | [Governance](docs/06-governance.md) | Unterlagen für BSI-Grundschutz, ISB, ISMS (Strukturanalyse, Schutzbedarfsfeststellung, IT-Sicherheitskonzept, Risikoanalyse), BCM und Datenschutz |
 
 ## Aufbau

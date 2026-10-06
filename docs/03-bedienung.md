@@ -16,7 +16,8 @@
 4. Darunter stehen **ausgegraut** die Meldungen der letzten 48 Stunden, die nicht mehr gelten:
    * **"Nicht mehr gültig"**: Die Gültigkeit ist abgelaufen.
    * **"Zurückgenommen / gelöst"**: Die Redaktion hat die Meldung beendet.
-5. Die Seite aktualisiert sich alle 2 Minuten von selbst.
+5. Die Seite aktualisiert sich alle 2 Minuten von selbst. Wer das nicht möchte (z. B. mit Screenreader), schaltet es
+   über den Link oben auf der Seite aus; die Einstellung gilt bis zum Abmelden.
 
 ## Für die Redaktion: Meldungen setzen
 

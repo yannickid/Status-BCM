@@ -116,6 +116,12 @@ try {
         'Persönliche Kennung auf der Startseite: mit TOTP direkt mit Einstellungen angemeldet');
     [$c, , $b] = req('GET', "$base/status.php", [], $jar);
     ok($c === 200 && str_contains($b, 'Regelbetrieb'), 'status.php zeigt Regelbetrieb');
+    ok(str_contains($b, 'http-equiv="refresh"') && str_contains($b, 'href="status.php?auto=0"'), 'Automatische Aktualisierung mit Link zum Abschalten');
+    [, , $b] = req('GET', "$base/status.php?auto=0", [], $jar);
+    [, , $b2] = req('GET', "$base/status.php", [], $jar);
+    ok(!str_contains($b, 'http-equiv="refresh"') && !str_contains($b2, 'http-equiv="refresh"') && str_contains($b2, 'href="status.php?auto=1"'),
+        'Automatische Aktualisierung bleibt für die Sitzung aus (WCAG 2.2.1)');
+    req('GET', "$base/status.php?auto=1", [], $jar);
 
     /* --- Login Stufe 2 --- */
     [$c, , $b] = req('GET', "$base/change.php", [], $jar);
