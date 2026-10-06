@@ -149,6 +149,7 @@ try {
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     ok(str_contains($b, 'Vorschau') && str_contains($b, 'name="totp"') && str_contains($b, 'ALARM-Mail wird versendet'),
         'Vorschau mit TOTP-Feld und Alarm-Hinweis');
+    ok(preg_match('/Diese Vorschau gilt bis <strong>\d\d:\d\d Uhr<\/strong> \(5 Minuten\)/', $b) === 1, 'Vorschau nennt ihre Ablaufzeit');
     preg_match('/name="pending_id" value="([0-9a-f]+)"/', $b, $m);
     $pid = $m[1] ?? '';
     $jar2 = $tmp . '/jar2.txt';
@@ -174,6 +175,25 @@ try {
     ok(str_contains($b2, 'Standort Nürnberg Mitte') && str_contains($b2, '+49 30 12345-0'), 'Standort ohne Durchwahl zeigt default_phone');
     ok(str_contains($b2, '(zentrale Rufnummer)') && !str_contains($b2, 'Für alle:'), 'Standard-Rufnummer gekennzeichnet; nur zwei Standorte, daher kein "Für alle"');
     ok(!str_contains($b2, 'Übung Leitstelle'), 'Interne Notiz erscheint nicht auf der Statusseite');
+
+    /* --- Abmeldezeit mit Vorwarnung (sitzung.php im Rahmen) --- */
+    ok(str_contains($b2, '<iframe class="session-frame" name="sitzung" src="sitzung.php" title="'), 'Angemeldete Seiten zeigen die Abmeldezeit (Rahmen)');
+    [$c, $h, $b] = req('GET', "$base/sitzung.php", [], $jar2);
+    ok($c === 200 && preg_match('/Anmeldung endet bei Untätigkeit um <strong>\d\d:\d\d Uhr/', $b) === 1 && str_contains($b, 'role="alert"')
+        && preg_match('#sitzung\.php\?css=(\d+)-(\d+)#', $b, $sm) === 1 && (int)$sm[2] - (int)$sm[1] === 120 && (int)$sm[2] > 1700,
+        'Rahmen: Abmeldezeit, Warnung 2 Minuten vorher');
+    ok(str_contains($h['content-security-policy'] ?? '', "frame-ancestors 'self'") && ($h['x-frame-options'] ?? '') === 'SAMEORIGIN' && !str_contains($b, '<script'),
+        'Rahmen nur in eigene Seiten einbettbar, ohne JavaScript');
+    [, $h] = req('GET', "$base/status.php", [], $jar2);
+    ok(str_contains($h['content-security-policy'] ?? '', "frame-ancestors 'none'") && str_contains($h['content-security-policy'] ?? '', "frame-src 'self'"),
+        'Übrige Seiten bleiben nicht einbettbar');
+    [$c, $h, $css] = req('GET', "$base/sitzung.php?css=1680-1800");
+    [$c2] = req('GET', "$base/sitzung.php?css=x");
+    ok($c === 200 && str_contains($h['content-type'] ?? '', 'text/css') && str_contains($css, '.sess-warn{animation:sbcm-on .01s linear 1680s forwards,sbcm-off .01s linear 1800s')
+        && $c2 === 400, 'Zeitsteuerung als Stylesheet, Eingabe geprüft');
+    [$c, $h] = req('POST', "$base/sitzung.php", ['_csrf' => csrf($b), 'action' => 'x'], $jar2);
+    [, , $b] = req('GET', "$base/sitzung.php?verlaengert=1", [], $jar2);
+    ok($c === 302 && str_contains($b, 'Verlängert.'), 'Verlängern im Rahmen');
     req('GET', "$base/status.php", [], $jar2);
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     ok(str_contains($b, 'gelesen: 1'), 'Lesezähler zählt den Aufruf einmal je Sitzung');
@@ -290,8 +310,7 @@ try {
     [, , $b] = req('GET', "$base/system.php", [], $jar);
     ok($c === 302 && $c2 === 302 && str_contains($b, 'Zusätzliche Empfänger je Stufe') && !str_contains($b, 'leitung@') && preg_match('/l\*+@z\*+\.example/', $b) === 1
         && str_contains($b, 'Adresse im An-Feld') && str_contains($b, '(Absenderadresse)'), 'Stufen-Empfänger maskiert, An-Feld und Standard-Rufnummer unter System');
-    [, , $b2] = req('GET', "$base/status.php", [], $jar2);
-    ok(str_contains($b2, '+49 800 5555'), 'Statusseite zeigt die geänderte Standard-Rufnummer');
+    ok(str_contains($b, 'Aktuell: <strong>+49 800 5555</strong>'), 'Standard-Rufnummer gespeichert (gilt für neue Meldungen)');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     ok(str_contains($b, 'Alarmkreis angelegt') && str_contains($b, 'Betreff-Präfixe geändert') && str_contains($b, 'Integrität der Protokollkette: OK'),
         'Systemänderungen im Protokoll');
@@ -327,7 +346,7 @@ try {
     [$c, , $csv] = req('POST', "$base/export.php", ['_csrf' => $t, 'format' => 'csv', 'with_ip' => '1', 'from' => date('Y-m-d'), 'to' => date('Y-m-d')], $jar);
     ok($c === 200 && str_contains($csv, '127.0.0.1'), 'CSV-Export auf Wunsch mit IP-Adressen');
     [$c, $h, $pdf] = req('POST', "$base/export.php", ['_csrf' => $t, 'format' => 'pdf'], $jar);
-    ok($c === 200 && str_starts_with($pdf, '%PDF-1.4') && str_contains($h['content-type'] ?? '', 'application/pdf') && str_contains($pdf, '%%EOF'), 'PDF-Export');
+    ok($c === 200 && str_starts_with($pdf, '%PDF-1.7') && str_contains($pdf, '/StructTreeRoot') && str_contains($h['content-type'] ?? '', 'application/pdf') && str_contains($pdf, '%%EOF'), 'PDF-Export');
     [$c] = req('POST', "$base/export.php", ['_csrf' => $t, 'format' => 'csv'], $jar2);
     ok($c === 302, 'Export nur für Admins');
     [, , $b] = req('GET', "$base/change.php", [], $jar);

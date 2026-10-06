@@ -19,7 +19,11 @@
 4. Darunter stehen **ausgegraut** die Meldungen der letzten 48 Stunden, die nicht mehr gelten:
    * **"Nicht mehr gültig"**: Die Gültigkeit ist abgelaufen.
    * **"Zurückgenommen / gelöst"**: Die Redaktion hat die Meldung beendet.
-5. Die Seite aktualisiert sich alle 2 Minuten von selbst. Wer das nicht möchte (z. B. mit Screenreader), schaltet es
+5. Ganz oben steht, wann die Anmeldung bei Untätigkeit endet (30 Minuten, mit persönlicher Kennung 15 Minuten).
+   **Zwei Minuten vorher** erscheint dort eine gelbe Warnung mit dem Knopf **Jetzt verlängern**; er verlängert die
+   Sitzung, ohne die Seite neu zu laden, Eingaben in Formularen bleiben also erhalten. Nach Ablauf steht dort
+   "Abgemeldet" mit einem Link zur Anmeldung.
+6. Die Seite aktualisiert sich alle 2 Minuten von selbst. Wer das nicht möchte (z. B. mit Screenreader), schaltet es
    über den Link oben auf der Seite aus; die Einstellung gilt bis zum Abmelden.
 
 ## Für die Redaktion: Meldungen setzen
@@ -154,7 +158,7 @@ Menü **System** (nur Admins). Änderungen verlangen Ihren TOTP-Code und stehen 
 | Betreff-Präfixe | Präfix der ALARM-Mail für "Neuer Alarm", "Aktualisierung" und "Ende", z. B. `[ALARM]` |
 | Adresse im An-Feld der ALARM-Mail | Leer = Absenderadresse (`mail.from_email`). Alle anderen Empfänger stehen nur im BCC |
 | Zusätzliche Empfänger je Stufe | Je Stufe (Information, Hinweis, Wichtiger Hinweis) Adressen, die jede ALARM-Mail dieser Stufe zusätzlich zu den gewählten Kreisen bekommen, z. B. Geschäftsführung nur bei "Wichtiger Hinweis". Per BCC, verschlüsselt, nur maskiert sichtbar |
-| Standard-Rufnummer | Ersetzt `default_phone` aus `config.json`. Erscheint bei Meldungen ohne Standortliste und bei Standorten ohne eigene Durchwahl. Leer = Wert aus `config.json` |
+| Standard-Rufnummer | Ersetzt `default_phone` aus `config.json`. Erscheint bei Meldungen ohne Standortliste und bei Standorten ohne eigene Durchwahl. Gilt für neue und geänderte Meldungen. Leer = Wert aus `config.json` |
 | Kopie-Adresse | `cc_default_mail1` ändern (Erinnerungen, Kopie der ALARM-Mails, Audit-Anker) |
 | Gemeinsamer Zugang für alle | Benutzername (z. B. "Unternehmen") und Zugangspasswort (Stufe 1) ändern; gilt sofort für neue Anmeldungen. Danach intern bekannt geben. Der Name darf keiner persönlichen Kennung gleichen |
 | Protokoll-Export | Änderungsprotokoll als **CSV** (Excel, Revision) oder **PDF** (Ablage, ISB), wahlweise für einen Zeitraum und mit oder ohne IP-Adressen. Kopf mit Integritätsprüfung und Kopf-Hash; jeder Export steht selbst im Protokoll |

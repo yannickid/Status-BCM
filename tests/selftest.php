@@ -406,8 +406,14 @@ ok(count($all) === audit_verify()['count'] && count(iterator_to_array(audit_rang
     'Export-Zeitraum: alle bzw. keine Einträge');
 $pdf = pdf_table('Änderungsprotokoll', ['Kopf-Hash x'], [['Nr.', 40], ['Beschreibung', 700]],
     array_map(fn($i) => [(string)$i, str_repeat('Längerer Text mit Umlauten äöü ß → ', 5)], range(1, 150)));
-ok(str_starts_with($pdf, '%PDF-1.4') && str_ends_with($pdf, "%%EOF\n") && str_contains($pdf, "\xC4nderungsprotokoll") && preg_match('#/Count (\d+)#', $pdf, $pm) && (int)$pm[1] > 1,
-    'PDF: mehrseitig, Umlaute in Windows-1252');
+ok(str_starts_with($pdf, '%PDF-1.7') && str_ends_with($pdf, "%%EOF\n") && str_contains($pdf, pdf_ustr('Änderungsprotokoll')) && preg_match('#/Count (\d+)#', $pdf, $pm) && (int)$pm[1] > 1,
+    'PDF: mehrseitig, Titel in Unicode');
+ok(str_contains($pdf, '/MarkInfo << /Marked true >>') && str_contains($pdf, '/StructTreeRoot 10 0 R') && str_contains($pdf, '/Lang (de-DE)')
+    && str_contains($pdf, '/DisplayDocTitle true') && str_contains($pdf, '<pdfuaid:part>1</pdfuaid:part>') && str_contains($pdf, '/FontFile2')
+    && substr_count($pdf, '/S /TH /P') === 2 && str_contains($pdf, '/Scope /Column') && substr_count($pdf, '/S /TR /P') === 151 && substr_count($pdf, '/S /H1') === 1,
+    'PDF getaggt (PDF/UA): Struktur H1/Tabelle mit Spaltenköpfen, Sprache, Titel, eingebettete Schrift');
+ok(pdf_enc('Größe – 5 €') === "Gr\xF6\xDFe \x96 5 \x80" && pdf_width('W', 10) === 9.44 && pdf_width('W', 10, true) === 9.44 && pdf_width('i', 10, true) === 2.78,
+    'PDF: Windows-1252 und Zeichenbreiten aus der eingebetteten Schrift');
 preg_match('/startxref\n(\d+)/', $pdf, $xm);
 preg_match_all('/^(\d{10}) 00000 n $/m', $pdf, $offs);
 ok(substr($pdf, (int)$xm[1], 4) === 'xref' && array_reduce(array_keys($offs[1]), fn($c, $i) => $c && str_starts_with(substr($pdf, (int)$offs[1][$i]), ($i + 1) . ' 0 obj'), true),
