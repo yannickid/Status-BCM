@@ -104,7 +104,7 @@ try {
     ok($c === 302, 'Login Stufe 2 erfolgreich');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     $t = csrf($b);
-    ok(str_contains($b, 'Neuen Status setzen') && str_contains($b, 'Angemeldet als Anna Test'), 'Formular nach Stufe 2 sichtbar');
+    ok(str_contains($b, 'Neue Meldung') && str_contains($b, 'Angemeldet als Anna Test'), 'Formular nach Stufe 2 sichtbar');
     ok(!str_contains($b, 'ziel1@') && !str_contains($b, 'ziel2@'), 'Ziel-Adressen erscheinen nicht in der Oberfläche');
 
     /* --- Formular -> Vorschau -> verbindlich setzen --- */
@@ -112,7 +112,7 @@ try {
         'validity_type' => 'duration', 'duration' => '240'], $jar);
     ok($c === 200 && str_contains($b, 'mindestens einen Standort'), 'Validierung: Standort fehlt');
     [$c] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'preview', 'mode' => 'set', 'status_key' => 'SICHERHEITSMASSNAHME',
-        'loc' => ['muc-sued', 'nue-mitte'], 'validity_type' => 'duration', 'duration' => '240', 'alarm_mail' => '1',
+        'loc' => ['muc-sued', 'nue-mitte'], 'validity_type' => 'duration', 'duration' => '240', 'alarm_mail' => '1', 'circles' => ['allgemein'],
         'note' => 'Übung Leitstelle'], $jar);
     ok($c === 302, 'Vorschau angelegt');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
@@ -132,7 +132,7 @@ try {
     [$c] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'commit', 'pending_id' => $pid, 'totp' => $code], $jar);
     ok($c === 302, 'Mit gültigem TOTP verbindlich gesetzt');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
-    ok(str_contains($b, 'Status gesetzt: Sicherheitsmaßnahme') && str_contains($b, 'ALARM-Mail an 4 Adressen'), 'Rückmeldung inkl. Alarm-Versand');
+    ok(str_contains($b, 'Meldung gesetzt: Sicherheitsmaßnahme') && str_contains($b, 'ALARM-Mail an 4 Adressen'), 'Rückmeldung inkl. Alarm-Versand');
     ok(str_contains($b, 'Integrität der Protokollkette: OK'), 'Audit-Kette im Protokoll OK');
     ok(!str_contains($b, 'ziel1@') && str_contains($b, 'recipients: 4'), 'Protokoll zeigt Empfänger nur als Anzahl');
 
@@ -148,24 +148,40 @@ try {
     ok(str_contains($b, 'Stufe 2: Anna Test'), 'Nutzung zeigt Anmeldungen Stufe 2 je Benutzer');
     ok(!preg_match('/<style|style="/', $b), 'Auch Stufe 2 ohne Inline-Styles');
 
+    preg_match('/name="target" value="(\d+)"/', $b, $m);
+    $tgt = $m[1] ?? '';
     // Replay: gleicher Code für die nächste Änderung
-    req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'preview', 'mode' => 'extend', 'validity_type' => 'duration', 'duration' => '60'], $jar);
+    req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'preview', 'mode' => 'extend', 'target' => $tgt, 'validity_type' => 'duration', 'duration' => '60'], $jar);
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     preg_match('/name="pending_id" value="([0-9a-f]+)"/', $b, $m);
     [, , $b] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'commit', 'pending_id' => $m[1] ?? '', 'totp' => $code], $jar);
     ok(str_contains($b, 'bereits verwendet'), 'TOTP-Replay wird abgelehnt');
     req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'cancel'], $jar);
 
+    // Zweite Meldung gleichzeitig (Hinweis, ohne TOTP)
+    [$c] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'preview', 'mode' => 'set', 'status_key' => 'HINWEIS',
+        'validity_type' => 'duration', 'duration' => '60'], $jar);
+    [, , $b] = req('GET', "$base/change.php", [], $jar);
+    preg_match('/name="pending_id" value="([0-9a-f]+)"/', $b, $m);
+    req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'commit', 'pending_id' => $m[1] ?? ''], $jar);
+    [, , $b2] = req('GET', "$base/status.php", [], $jar2);
+    ok(str_contains($b2, 'Sicherheitsmaßnahme') && str_contains($b2, 'Organisatorischer Hinweis') && strpos($b2, 'Sicherheitsmaßnahme') < strpos($b2, 'Organisatorischer Hinweis'),
+        'Zwei Meldungen gleichzeitig, kritische zuerst');
+    [, , $b] = req('GET', "$base/change.php", [], $jar);
+    ok(str_contains($b, 'Aktuelle Meldungen (2)'), 'Einstellungen zeigen beide Meldungen zur Bearbeitung');
+
     // Beenden (ohne TOTP)
-    req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'preview', 'mode' => 'end'], $jar);
+    req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'preview', 'mode' => 'end', 'target' => $tgt, 'note' => 'gelöst'], $jar);
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     preg_match('/name="pending_id" value="([0-9a-f]+)"/', $b, $m);
     ok(!str_contains($b, 'name="totp"'), 'Beenden braucht kein TOTP');
     req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'commit', 'pending_id' => $m[1] ?? ''], $jar);
     [, , $b2] = req('GET', "$base/status.php", [], $jar2);
-    ok(str_contains($b2, 'Regelbetrieb'), 'Status beendet -> Regelbetrieb');
+    ok(!str_contains($b2, 'Regelbetrieb') && str_contains($b2, 'Zurückgenommen / gelöst') && str_contains($b2, 'status-gone'),
+        'Beendete Meldung bleibt ausgegraut sichtbar, die andere gilt weiter');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
-    ok(substr_count($b, 'Sicherheitsmaßnahme') >= 2 && str_contains($b, 'Status beendet'), 'Historie und Protokoll vollständig');
+    ok(substr_count($b, 'Sicherheitsmaßnahme') >= 2 && str_contains($b, 'Meldung beendet') && str_contains($b, 'Aktuelle Meldungen (1)'),
+        'Historie und Protokoll vollständig');
     ok(str_contains($b, 'href="admin.php"'), 'Admin sieht den Menüpunkt Benutzer');
 
     /* --- Benutzerverwaltung --- */
@@ -190,7 +206,7 @@ try {
     $t4 = csrf($b);
     [$c] = req('POST', "$base/change.php", ['_csrf' => $t4, 'action' => 'login2', 'user' => 'carla', 'password' => $once], $jar4);
     [, , $b] = req('GET', "$base/change.php", [], $jar4);
-    ok($c === 302 && str_contains($b, 'Zugang einrichten') && !str_contains($b, 'Neuen Status setzen'), 'Erster Login: nur Einrichtung möglich');
+    ok($c === 302 && str_contains($b, 'Zugang einrichten') && !str_contains($b, 'Neue Meldung'), 'Erster Login: nur Einrichtung möglich');
     ok(str_contains($b, 'class="qr-code" src="data:image/svg+xml;base64,'), 'QR-Code für die Authenticator-App wird angezeigt');
     preg_match('/font-monospace text-break my-1">([A-Z2-7 ]+)</', $b, $m);
     $carlaSecret = str_replace(' ', '', $m[1] ?? '');
@@ -202,7 +218,7 @@ try {
     [$c] = req('POST', "$base/change.php", ['_csrf' => $t4, 'action' => 'setup', 'old_password' => $once, 'new_password' => 'Ein langer Satz als Passwort',
         'new_password2' => 'Ein langer Satz als Passwort', 'totp' => fresh_code($carlaSecret)], $jar4);
     [, , $b] = req('GET', "$base/change.php", [], $jar4);
-    ok($c === 302 && str_contains($b, 'Einrichtung abgeschlossen') && str_contains($b, 'Neuen Status setzen'), 'Einrichtung abgeschlossen, Status setzen freigeschaltet');
+    ok($c === 302 && str_contains($b, 'Einrichtung abgeschlossen') && str_contains($b, 'Neue Meldung'), 'Einrichtung abgeschlossen, Status setzen freigeschaltet');
     ok(!str_contains($b, 'href="admin.php"'), 'Redaktion sieht keinen Menüpunkt Benutzer');
     [$c, , $b] = req('GET', "$base/admin.php", [], $jar4);
     ok($c === 403 && str_contains($b, 'Admins vorbehalten'), 'admin.php für Redaktion gesperrt');
@@ -215,6 +231,29 @@ try {
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     ok(str_contains($b, 'Benutzer angelegt') && str_contains($b, 'TOTP gekoppelt') && str_contains($b, 'Benutzer deaktiviert')
         && str_contains($b, 'Integrität der Protokollkette: OK'), 'Benutzerverwaltung lückenlos im Protokoll');
+
+    /* --- System: Alarmkreise, Standort-Adressen, Kontakte, Präfixe --- */
+    [$c, , $b] = req('GET', "$base/system.php", [], $jar);
+    ok($c === 200 && str_contains($b, 'Alarmkreise (1)') && str_contains($b, 'Allgemein') && !str_contains($b, 'ziel1@'), 'System zeigt bisherige Empfänger als Kreis "Allgemein", maskiert');
+    [$c] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'circle_create', 'name' => 'IT', 'emails' => "it@ziel.example", 'totp' => fresh_code($secret)], $jar);
+    [$c2] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'location_save', 'id' => 'ham-hafen', 'name' => 'Standort Hamburg Hafen',
+        'phone' => '', 'emails' => 'verwaltung.ham@ziel.example', 'totp' => fresh_code($secret)], $jar);
+    [$c3] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'contact_save', 'id' => '', 'name' => 'Krisenstab-Konferenz', 'platform' => 'Teams',
+        'url' => 'https://teams.example/meet/1', 'totp' => fresh_code($secret)], $jar);
+    [$c4] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'prefix', 'new' => '[NOTFALL]', 'update' => '[Update]', 'end' => '[Entwarnung]',
+        'totp' => fresh_code($secret)], $jar);
+    [, , $b] = req('GET', "$base/system.php", [], $jar);
+    ok($c === 302 && $c2 === 302 && $c3 === 302 && $c4 === 302 && str_contains($b, 'Alarmkreise (2)') && str_contains($b, 'Kontakte für Meldungen (1)')
+        && str_contains($b, 'value="[NOTFALL]"'), 'Kreis, Standort-Adresse, Kontakt und Präfixe gespeichert');
+    ok(!str_contains($b, 'verwaltung.ham@') && !str_contains($b, 'it@ziel') && preg_match('/v\*+@z\*+\.example/', $b) === 1,
+        'Standort- und Kreisadressen nur maskiert');
+    [, , $b2] = req('GET', "$base/status.php", [], $jar2);
+    ok(!str_contains($b2, 'verwaltung') && !str_contains($b2, 'ziel.example'), 'Statusseite zeigt keine Verteiler-Adressen');
+    [, , $b] = req('GET', "$base/change.php", [], $jar);
+    ok(str_contains($b, 'name="circles[]" value="it"') && str_contains($b, 'Krisenstab-Konferenz'), 'Kreise und Kontakte im Meldungsformular wählbar');
+    [, , $b] = req('GET', "$base/change.php", [], $jar);
+    ok(str_contains($b, 'Alarmkreis angelegt') && str_contains($b, 'Betreff-Präfixe geändert') && str_contains($b, 'Integrität der Protokollkette: OK'),
+        'Systemänderungen im Protokoll');
 
     /* --- Alarm-Mail im Ausgang (BCC) --- */
     $alarm = '';

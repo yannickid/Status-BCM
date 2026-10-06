@@ -9,6 +9,7 @@
 .sev-info{--sev:var(--bs-primary)}
 .sev-warn{--sev:var(--bs-warning)}
 .sev-critical{--sev:var(--bs-danger)}
+.status-gone{--sev:var(--bs-secondary-bg);opacity:.65;filter:grayscale(1)}
 .status-label{font-size:1.35rem;font-weight:700;line-height:1.25}
 
 /* Große Touch-Ziele auf dem Smartphone */

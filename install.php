@@ -339,8 +339,8 @@ if ($act === 'finish' && !$editCfg) {
                     throw new InvalidArgumentException($e);
                 }
                 if (trim((string)($_POST['recipients'] ?? '')) !== '') {
-                    [, $e] = recipients_add((string)$_POST['recipients'], 'system:install');
-                    if ($e) {
+                    $e = circle_update('allgemein', (string)$_POST['recipients'], [], 'system:install');
+                    if ($e && !str_starts_with($e, 'Keine Änderung')) {
                         throw new InvalidArgumentException('ALARM-Empfänger: ' . $e);
                     }
                 }
@@ -451,9 +451,9 @@ echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Ers
 echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">E-Mail-Adressen</h2>'
     . inst_field('Kopie-Adresse (cc_default_mail1)', 'cc1', (string)($_POST['cc1'] ?? ''), 'email', 'required',
         'Erhält Erinnerungen, Kopien der ALARM-Mails und täglich den Audit-Anker, z. B. die Informationssicherheit.')
-    . '<div class="mb-2"><label class="form-label" for="f_rcpt">ALARM-Empfänger (optional, eine Adresse je Zeile)</label>'
+    . '<div class="mb-2"><label class="form-label" for="f_rcpt">ALARM-Empfänger, Kreis "Allgemein" (optional, eine Adresse je Zeile)</label>'
     . '<textarea class="form-control" id="f_rcpt" name="recipients" rows="4">' . $p('recipients') . '</textarea>'
-    . '<div class="form-text">Werden nur per BCC angeschrieben und verschlüsselt gespeichert. Später unter System änderbar.</div></div>'
+    . '<div class="form-text">Werden nur per BCC angeschrieben und verschlüsselt gespeichert. Weitere Alarmkreise (z. B. IT, Krisenstab, Leitung) und Standort-Adressen später unter System.</div></div>'
     . '</div></div>';
 echo '<div class="d-grid"><button class="btn btn-primary btn-lg" type="submit">Einrichtung abschließen</button></div></form>';
 page_end();

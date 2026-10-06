@@ -51,7 +51,7 @@ flowchart LR
   W --> L[lib.inc.php]
   C --> L
   L -- PDO --> D[(MySQL/MariaDB<br>verschlüsselte Nutzdaten,<br>Audit-Hash-Kette)]
-  L -- SMTP STARTTLS/SSL --> M[Mailserver] -- BCC --> E[ALARM-Empfänger]
+  L -- SMTP STARTTLS/SSL --> M[Mailserver] -- BCC --> E[Alarmkreise und Standortverwaltungen]
   K[Cron CLI oder URL+Token] --> L
   F[config.local.inc.php<br>Master-Key, Hashes] -. nur lesend .-> L
   J[config.json<br>freigegebene Texte] -. nur lesend .-> L
@@ -68,7 +68,7 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 |---|---|---|
 | Beschäftigte | Stufe 1: gemeinsames Zugangspasswort | Aktuellen Status lesen |
 | Redaktion (`editor`) | Stufe 1 + Stufe 2 (persönlich) | Status setzen, verlängern, beenden; ALARM-Mail auslösen (mit TOTP); Verlauf, Protokoll und Nutzung einsehen; eigenes Passwort ändern |
-| Admin (`admin`) | wie Redaktion | zusätzlich Benutzerverwaltung (`admin.php`): anlegen, Passwort/TOTP zurücksetzen, Rolle ändern, (de)aktivieren; System (`system.php`): Zugangspasswort Stufe 1, ALARM-Empfänger, Kopie-Adresse; Änderungen jeweils mit TOTP; Prüfung, Cron-Adresse, Testmail |
+| Admin (`admin`) | wie Redaktion | zusätzlich Benutzerverwaltung (`admin.php`): anlegen, Passwort/TOTP zurücksetzen, Rolle ändern, (de)aktivieren; System (`system.php`): Zugangspasswort Stufe 1, Alarmkreise, Standorte mit Adressen der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse; Änderungen jeweils mit TOTP; Prüfung, Cron-Adresse, Testmail |
 | Betrieb (FTP, optional Shell) | Zugang zum Webspace | Ersteinrichtung (`install.php` mit Einrichtungscode aus `storage/`), `config.json` und `config.local.inc.php` pflegen, Sicherung; optional `setup.php` |
 
 * **Need-to-know:** Empfängeradressen sieht niemand in der Oberfläche, nur die Anzahl bzw. maskiert (`m****@e***.de`).
@@ -120,9 +120,10 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 | TOTP | HMAC-SHA-1 nach RFC 6238 (Standard der Authenticator-Apps; SHA-1 ist im HMAC-Einsatz weiterhin unkritisch) |
 | Transport | HTTPS (Hoster); SMTP mit STARTTLS oder SSL, TLS 1.2/1.3, **Zertifikatsprüfung** aktiv; Zugangsdaten werden nie unverschlüsselt gesendet |
 
-**Was verschlüsselt gespeichert wird:** Meldungstexte und Standortdaten jedes Status, Mail-Inhalte und
+**Was verschlüsselt gespeichert wird:** Meldungstexte, Standort- und Kontaktdaten jeder Meldung, Mail-Inhalte und
 Zustellergebnisse, Audit-Details (vorher/nachher, IP, Browser), E-Mail-Adressen und TOTP-Secrets der Benutzer,
-ALARM-Empfänger, `cc_default_mail1` und der Hash des Zugangspassworts Stufe 1 (Tabelle `kv`, Kontext je Einstellung,
+Alarmkreise mit ihren Adressen, Standorte mit den E-Mail-Adressen der Standortverwaltung, Kontakte, Betreff-Präfixe,
+`cc_default_mail1` und der Hash des Zugangspassworts Stufe 1 (Tabelle `kv`, Kontext je Einstellung,
 damit Werte nicht vertauscht werden können; ältere Werte aus `config.local.inc.php` ebenfalls verschlüsselt).
 Der QR-Code für die Authenticator-App wird auf dem Server erzeugt (`qr.inc.php`); das TOTP-Secret geht an keinen fremden
 Dienst.
@@ -140,10 +141,10 @@ nicht mehr lesbar. Ein Schlüsselwechsel ist nur bei einer Neuinstallation vorge
 |---|---|
 | Anmeldung Stufe 1 / Stufe 2 / Abmeldung | `login1.ok`, `login2.ok`, `logout` |
 | Fehlgeschlagene Anmeldung Stufe 2, ungültiger TOTP-Code | `login2.fail`, `totp.fail` |
-| Status gesetzt / verlängert / beendet / automatisch zurückgesetzt | `status.set`, `status.extend`, `status.end`, `status.auto_end` (vorher → nachher, Standorte, Gültigkeit, ALARM ja/nein, TOTP ja/nein, interne Notiz) |
-| Mails | `mail.alarm`, `mail.reminder`, `mail.autorevert`, `mail.pw_reminder`, `mail.anchor` (nur Anzahl erfolgreich/fehlgeschlagen) |
+| Meldung gesetzt / verlängert / geändert / beendet / automatisch beendet | `status.set`, `status.extend`, `status.update`, `status.end`, `status.auto_end` (Meldungsnummer, vorher → nachher, Standorte, Kontakte, Gültigkeit, ALARM ja/nein, TOTP ja/nein, interne Notiz) |
+| Mails | `mail.alarm` (Art neu/Aktualisierung/Ende, gewählte Kreise, Anzahl Standortadressen), `mail.reminder`, `mail.autorevert`, `mail.pw_reminder`, `mail.anchor` (nur Anzahl erfolgreich/fehlgeschlagen) |
 | Benutzerverwaltung | `user.create`, `user.reset_pw`, `user.set_pw`, `user.reset_totp`, `user.set_totp`, `user.role`, `user.disable`, `user.enable` |
-| Einrichtung und System | `system.install`, `setting.stage1`, `setting.cc1`, `setting.recipient_add`, `setting.recipient_remove` (nur maskierte Adressen), `system.cron_manual`, `mail.test` |
+| Einrichtung und System | `system.install`, `setting.stage1`, `setting.cc1`, `setting.circle_create/update/delete`, `setting.location_create/update/delete`, `setting.contact_create/update/delete`, `setting.mail_prefix` (Adressen nur maskiert), `system.cron_manual`, `mail.test` |
 
 Jeder Eintrag enthält Zeitstempel (UTC), Akteur, Stufe (0 = System, 1, 2), Aktion und Objekt. Die verschlüsselten
 Details enthalten außerdem IP-Adresse, Browser und Skript bzw. bei CLI den Systembenutzer.
@@ -159,8 +160,12 @@ Details enthalten außerdem IP-Adresse, Browser und Skript bzw. bei CLI den Syst
 3. **Gleiche Transaktion:** Status und Protokolleintrag werden atomar geschrieben. Es gibt keinen Status ohne Eintrag.
 4. **Täglicher Audit-Anker:** `cron.php` mailt einmal täglich Kopf-Hash und Anzahl der Einträge an `cc_default_mail1`.
    Damit wird auch ein **Kürzen am Ende** der Kette erkennbar, das die Hash-Kette allein nicht zeigt.
-5. **Zeilen-MAC und Abgleich:** Statuszeilen und Benutzerzeilen tragen einen MAC. Der aktive Status muss mit dem
-   letzten Statuseintrag im Protokoll übereinstimmen, sonst zeigt die Statusseite "konnte nicht verifiziert werden".
+5. **Zeilen-MAC und Abgleich:** Statuszeilen und Benutzerzeilen tragen einen MAC (bei Meldungen inklusive
+   Meldungsnummer). Welche Meldungen gelten, ergibt sich aus dem Protokoll: Die Anwendung spielt alle Einträge
+   `status.set`, `status.extend`, `status.update`, `status.end` und `status.auto_end` nach. Ist in der Datenbank eine
+   Zeile aktiv, die laut Protokoll abgelöst oder beendet ist (oder umgekehrt), zeigt die Statusseite sie als "konnte
+   nicht verifiziert werden". Einträge aus Version 1.2 (eine Meldung löste die vorige ab) erkennt die Anwendung an der
+   beim Update gemerkten Protokollposition.
    Ein Benutzer mit verändertem MAC wird nicht mehr zur Anmeldung zugelassen.
 
 **Prüfen:** im Browser unter **System → Prüfung** oder **Einstellungen → Änderungsprotokoll**, per Kommandozeile
@@ -171,14 +176,17 @@ festlegen (Abschnitt 7). Eine Löschung ist nur durch die Datenbankadministratio
 
 ### 5.5 Schutz der Empfängeradressen
 
-* Die Adressen werden unter **System** gepflegt (Änderung nur mit TOTP, protokolliert) und liegen verschlüsselt in der
-  Datenbank. Ältere Einträge in `config.local.inc.php` gelten zusätzlich. Nichts davon steht im Git.
+* Alarmkreise und die E-Mail-Adressen der Standortverwaltungen werden unter **System** gepflegt (Änderung nur mit
+  TOTP, protokolliert) und liegen verschlüsselt in der Datenbank. Nichts davon steht im Git oder in `config.json`.
+* Jede ALARM-Mail geht nur an die gewählten Kreise und die Standortverwaltungen der betroffenen Standorte
+  (Need-to-know), dazu an die auslösende Person und `cc_default_mail1`.
 * Der Versand erfolgt **ausschließlich per BCC** (`To: undisclosed-recipients:;`), in Paketen zu max. 50 Adressen.
 * In Oberfläche und Protokoll erscheinen nur die Anzahl bzw. maskierte Adressen.
 
 ### 5.6 Pressetaugliche Meldungen (Integrität der Aussage)
 
-* Es gibt nur freigegebene Textbausteine aus `config.json`, keinen Freitext.
+* Es gibt nur freigegebene Textbausteine aus `config.json`, keinen Freitext. Standortnamen, Kontaktbezeichnungen und
+  Betreff-Präfixe aus dem Browser werden ebenfalls auf kritische Begriffe geprüft; Links in Kontakten nur mit https.
 * `forbidden_terms` (z. B. "Angriff", "Ausfall", "Störung", "Täter") wird für Status, Standorte und Mail-Vorlagen
   geprüft (System → Prüfung, Hinweis in `change.php`). Ein Status mit kritischem Begriff **lässt sich nicht setzen**.
 * Übungen werden in Seite und Mail ausdrücklich als **ÜBUNG** gekennzeichnet.
@@ -237,7 +245,8 @@ Anwendung.
 | Name, E-Mail, Passwort-Hash, TOTP-Secret der Redaktion/Admins | Anmeldung, Erinnerungen | DB `sbcm_account` (E-Mail/Secret verschlüsselt) | Deaktivierung sofort; Zeile bleibt für die Nachvollziehbarkeit |
 | IP-Adresse, Browser bei Änderungen und Anmeldungen | Nachweis wer/wie | Audit-Details (verschlüsselt) | gemäß Löschkonzept des Betreibers |
 | Pseudonymisierte IP bei Fehlversuchen | Brute-Force-Schutz | `sbcm_login_attempt` | automatisch nach 2 Tagen |
-| ALARM-Empfänger | Alarmierung | `config.local.inc.php` (verschlüsselt) | durch Entfernen (`remove-recipient`) |
+| Adressen der Alarmkreise und Standortverwaltungen | Alarmierung | DB `sbcm_kv` (verschlüsselt) | durch Entfernen unter **System** |
+| Kontakte für Meldungen (Funktionsnummer, -postfach, Konferenz) | Erreichbarkeit im Notfall | DB `sbcm_kv`, Kopie in der Meldung (verschlüsselt) | Entfernen unter **System**; Kopie bleibt mit der Meldung im Verlauf |
 
 *Betreiber:* Verzeichnis von Verarbeitungstätigkeiten ergänzen, Beschäftigte informieren (Lesezähler, Protokoll) und
 gegebenenfalls den Personal- bzw. Betriebsrat beteiligen.

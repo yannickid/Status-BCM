@@ -116,22 +116,22 @@ try {
     ok(str_starts_with($svg, '<svg') && str_contains($svg, '<path d="M'), 'QR-Code ist ein gültiges SVG');
     [$c] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'setup', 'totp' => fresh_code($secret)], $jar);
     [, , $b] = req('GET', "$base/change.php", [], $jar);
-    ok($c === 302 && str_contains($b, 'Neuen Status setzen') && str_contains($b, 'href="system.php"'), 'Kopplung abgeschlossen, Menü System sichtbar');
+    ok($c === 302 && str_contains($b, 'Neue Meldung') && str_contains($b, 'href="system.php"'), 'Kopplung abgeschlossen, Menü System sichtbar');
 
     /* --- System-Seite --- */
     [$c, , $b] = req('GET', "$base/system.php", [], $jar);
     $t = csrf($b);
-    ok($c === 200 && str_contains($b, 'ALARM-Empfänger (2)') && str_contains($b, 'z****@z***.example') && !str_contains($b, 'ziel1@')
+    ok($c === 200 && str_contains($b, 'Alarmkreise (1)') && str_contains($b, '<strong>Allgemein</strong> <span class="badge text-bg-secondary">2</span>') && str_contains($b, 'z****@z***.example') && !str_contains($b, 'ziel1@')
         && str_contains($b, 'i**@t***.example'), 'System zeigt Empfänger und Kopie-Adresse nur maskiert');
     ok(str_contains($b, 'Cron läuft (letzter Lauf: noch nie)') && str_contains($b, 'cron.php?t=' . $cronToken), 'Prüfung meldet fehlenden Cron, Cron-Adresse sichtbar');
-    [, , $b] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'recipient_add', 'emails' => 'neu@ziel.example', 'totp' => '000000'], $jar);
+    [, , $b] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'circle_update', 'id' => 'allgemein', 'emails' => 'neu@ziel.example', 'totp' => '000000'], $jar);
     ok(str_contains($b, 'Bestätigungscode ist ungültig'), 'Änderung ohne gültigen TOTP-Code abgelehnt');
-    [$c] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'recipient_add', 'emails' => "neu@ziel.example, ziel1@ziel.example", 'totp' => fresh_code($secret)], $jar);
+    [$c] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'circle_update', 'id' => 'allgemein', 'emails' => "neu@ziel.example, ziel1@ziel.example", 'totp' => fresh_code($secret)], $jar);
     [, , $b] = req('GET', "$base/system.php", [], $jar);
-    ok($c === 302 && str_contains($b, '1 Empfänger hinzugefügt') && str_contains($b, 'ALARM-Empfänger (3)'), 'Empfänger hinzugefügt, Doppelte ignoriert');
-    [$c] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'recipient_remove', 'nr' => '0', 'totp' => fresh_code($secret)], $jar);
+    ok($c === 302 && str_contains($b, 'Alarmkreis geändert') && str_contains($b, '<strong>Allgemein</strong> <span class="badge text-bg-secondary">3</span>'), 'Empfänger hinzugefügt, Doppelte ignoriert');
+    [$c] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'circle_update', 'id' => 'allgemein', 'emails' => '', 'rm' => ['0'], 'totp' => fresh_code($secret)], $jar);
     [, , $b] = req('GET', "$base/system.php", [], $jar);
-    ok($c === 302 && str_contains($b, 'ALARM-Empfänger (2)'), 'Empfänger entfernt');
+    ok($c === 302 && str_contains($b, '<strong>Allgemein</strong> <span class="badge text-bg-secondary">2</span>'), 'Empfänger entfernt');
     [$c] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'cc1', 'email' => 'notfall@test.example', 'totp' => fresh_code($secret)], $jar);
     [, , $b] = req('GET', "$base/system.php", [], $jar);
     ok($c === 302 && str_contains($b, 'n******@t***.example'), 'Kopie-Adresse geändert');
@@ -162,7 +162,7 @@ try {
 
     /* --- Protokoll --- */
     [, , $b] = req('GET', "$base/change.php", [], $jar);
-    ok(str_contains($b, 'Einrichtung abgeschlossen (install.php)') && str_contains($b, 'ALARM-Empfänger hinzugefügt') && str_contains($b, 'ALARM-Empfänger entfernt')
+    ok(str_contains($b, 'Einrichtung abgeschlossen (install.php)') && substr_count($b, 'Alarmkreis geändert') >= 2
         && str_contains($b, 'Kopie-Adresse (cc_default_mail1) geändert') && str_contains($b, 'Zugangspasswort Stufe 1 geändert')
         && str_contains($b, 'Integrität der Protokollkette: OK'), 'Einrichtung und Systemänderungen lückenlos im Protokoll');
 
@@ -171,9 +171,9 @@ try {
         : new PDO('sqlite:' . $tmp . '/storage/status.sqlite');
     $rows = $pdo->query("SELECT k, v FROM {$prefix}kv WHERE k LIKE 'set:%'")->fetchAll(PDO::FETCH_KEY_PAIR);
     ok(count($rows) === 3 && !preg_grep('/ziel|test\.example|\$2y\$/', $rows), 'Einstellungen nur verschlüsselt in der Datenbank');
-    $pdo->prepare("UPDATE {$prefix}kv SET v = ? WHERE k = 'set:recipients'")->execute([$rows['set:cc1']]);
+    $pdo->prepare("UPDATE {$prefix}kv SET v = ? WHERE k = 'set:circles'")->execute([$rows['set:cc1']]);
     [, , $b] = req('GET', "$base/system.php", [], $jar);
-    ok(str_contains($b, 'Einstellung recipients nicht lesbar'), 'Vertauschte Einstellung wird erkannt');
+    ok(str_contains($b, 'Einstellung circles nicht lesbar'), 'Vertauschte Einstellung wird erkannt');
 
     /* --- Notfallzugang (storage/notfall.txt) --- */
     [$c] = req('GET', "$base/install.php", [], $tmp . '/jar-nf.txt');

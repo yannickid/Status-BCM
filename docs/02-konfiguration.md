@@ -9,8 +9,10 @@ Status-BCM hat drei Konfigurationsdateien:
 | `config.json` | Status-Katalog, Standorte, Mail-Vorlagen, kritische Begriffe | ja |
 
 Dazu kommen die Einstellungen, die Admins im Browser unter **System** pflegen: Zugangspasswort Stufe 1,
-ALARM-Empfänger und Kopie-Adresse. Sie liegen verschlüsselt in der Datenbank und haben Vorrang vor
-`auth.stage1_hash` und `mail.cc_default_mail1`; Empfänger aus der Datei gelten zusätzlich.
+Kopie-Adresse, Alarmkreise, Standorte (mit E-Mail der Standortverwaltung), Kontakte für Meldungen und
+Betreff-Präfixe. Sie liegen verschlüsselt in der Datenbank und haben Vorrang vor `auth.stage1_hash`,
+`mail.cc_default_mail1` und den Standorten in `config.json`. Empfänger aus `mail.recipients` bilden den Kreis
+"Allgemein", bis die Alarmkreise das erste Mal unter **System** gespeichert werden; dann werden sie übernommen.
 
 Zum Bearbeiten von `config.local.inc.php` (z. B. neues SMTP-Passwort): per FTP herunterladen, im Texteditor ändern,
 wieder hochladen. Vorher eine Kopie sichern.
@@ -27,7 +29,7 @@ wieder hochladen. Vorher eine Kopie sichern.
 | `mail.transport` | `smtp` | `log` schreibt Mails nur nach `storage/outbox` (zum Testen) |
 | `mail.host`, `port`, `secure`, `user`, `pass` | 587 / `starttls` | SMTP; `secure` = `starttls`, `ssl` oder `none` (nur localhost) |
 | `mail.cc_default_mail1` | – | Kopie von Erinnerungen, Alarm-Mails und täglichem Audit-Anker. Besser unter **System** pflegen |
-| `mail.recipients` | `[]` | ALARM-Empfänger. Besser unter **System** pflegen |
+| `mail.recipients` | `[]` | frühere ALARM-Empfänger (Kreis "Allgemein"). Besser unter **System → Alarmkreise** pflegen |
 | `auth.max_failures` / `max_failures_user` / `window_seconds` | 5 / 10 / 900 | Brute-Force-Sperre je IP / je Benutzer |
 | `auth.idle_minutes` / `stage2_idle_minutes` / `absolute_hours` | 30 / 15 / 10 | Sitzungsdauer |
 | `auth.totp_enforce_all` | `false` | `true` = TOTP bei **jeder** Änderung, auch beim Beenden |
@@ -37,9 +39,10 @@ wieder hochladen. Vorher eine Kopie sichern.
 | `auth.stage1_max_age_days` | 365 | Erinnerung an `cc_default_mail1`, das Zugangspasswort zu wechseln |
 | `cron.token` / `cron.ip_allowlist` | – / `[]` | Aufruf von `cron.php` per URL |
 | `reminder.repeat_minutes` / `max_count` | 60 / 0 | Erinnerung bei abgelaufenem Status; 0 = wiederholen, bis erledigt |
-| `reminder.auto_revert_after_minutes` | 0 | > 0: Status nach Ablauf ohne Reaktion automatisch auf Regelbetrieb |
+| `reminder.auto_revert_after_minutes` | 0 | > 0: Meldung nach Ablauf ohne Reaktion automatisch beenden |
+| `display.keep_hours` | 48 | so lange bleiben abgelaufene oder beendete Meldungen ausgegraut sichtbar |
 | `reminder.anchor_mail` | `true` | täglicher Audit-Anker an `cc_default_mail1` |
-| `limits.max_validity_days` | 30 | höchste Gültigkeitsdauer eines Status |
+| `limits.max_validity_days` | 30 | höchste Gültigkeitsdauer einer Meldung |
 | `net.trusted_proxies` | `[]` | nur hinter einem Reverse-Proxy setzen |
 
 Geheimnisse können überall als `enc:v1:…` stehen (erzeugt mit `php setup.php encrypt-value '<wert>'`, optional).
@@ -54,7 +57,7 @@ Geheimnisse können überall als `enc:v1:…` stehen (erzeugt mit `php setup.php
   "forbidden_terms": ["angriff", "ausfall", "störung", "…"],
   "locations": [ { "id": "muc-sued", "name": "Standort München Süd", "phone": "+49 89 12345-110" } ],
   "statuses": [ { … } ],
-  "mail_templates": { "alarm": {…}, "reminder": {…}, "autorevert": {…}, "password": {…}, "anchor": {…} }
+  "mail_templates": { "alarm": {…}, "alarm_end": {…}, "reminder": {…}, "autorevert": {…}, "password": {…}, "anchor": {…} }
 }
 ```
 
@@ -79,6 +82,10 @@ Geheimnisse können überall als `enc:v1:…` stehen (erzeugt mit `php setup.php
 `id` (`a-z0-9_-`), `name`, `phone`. Ohne `phone` wird `default_phone` angezeigt, bzw. die `phone` des Status, falls
 gesetzt.
 
+Die Liste in `config.json` ist nur der Startwert. Sobald ein Admin unter **System → Standorte** etwas speichert, gilt
+die Liste aus dem Browser (verschlüsselt in der Datenbank, mit den E-Mail-Adressen der Standortverwaltungen).
+Die Adressen gehören bewusst nicht in `config.json`, damit sie nicht im Klartext auf dem Webspace oder in Git liegen.
+
 ### Regeln für Meldungstexte
 
 * Nur Auswirkung und Handlungsanweisung nennen, nie Ursache, Umfang, Namen oder Zahlen.
@@ -88,14 +95,21 @@ gesetzt.
   lässt sich nicht setzen.
 * Jede Textänderung per Pull Request, nach dem Upload **System → Prüfung** ansehen.
 
-### Warum der Katalog in einer Datei liegt und nicht in der Datenbank
+### Warum die Meldungstexte in einer Datei liegen und nicht im Browser bearbeitet werden
 
 Die Datenbank ist auf einem Webspace die angreifbarere Stelle: Ein geleaktes DB-Passwort oder eine SQL-Lücke reicht
 dort schon. Um `config.json` zu ändern, braucht ein Angreifer Dateizugriff. In Git ist außerdem jede Textänderung
 nachvollziehbar. Die Datei schreibgeschützt (`0444`) und möglichst außerhalb des Webroots ablegen.
 
+Würden die Texte im Browser gepflegt, könnte ein einziges übernommenes Admin-Konto beliebigen Text an alle
+Beschäftigten und per ALARM-Mail verschicken. Standorte, Kontakte, Alarmkreise und Präfixe sind dagegen im Browser
+pflegbar: Sie enthalten keinen Meldungstext, werden auf kritische Begriffe geprüft, verlangen TOTP und stehen im
+Protokoll.
+
 ### Mail-Vorlagen
 
-Platzhalter in geschweiften Klammern. Für `alarm`: `{prefix}` (ÜBUNG), `{label}`, `{text}`, `{locations}`, `{phone}`,
-`{validity}`, `{url}`. Für `password`: `{name}`, `{what}`, `{phrase}`, `{url}`. Mail-Vorlagen werden ebenfalls auf
+Platzhalter in geschweiften Klammern. Für `alarm` und `alarm_end`: `{prefix}` (ÜBUNG), `{label}`, `{text}`,
+`{locations}`, `{phone}`, `{contacts}`, `{validity}`, `{url}`. Fehlt `{contacts}` in `alarm`, werden die Kontakte
+angehängt. Fehlt `alarm_end`, gilt ein eingebauter Text. Das Betreff-Präfix (`[ALARM]`, `[Aktualisierung]`, `[Ende]`)
+stellt die Anwendung voran; es wird unter **System** festgelegt. Für `password`: `{name}`, `{what}`, `{phrase}`, `{url}`. Mail-Vorlagen werden ebenfalls auf
 kritische Begriffe geprüft.

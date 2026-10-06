@@ -10,7 +10,7 @@ if (!defined('SBCM')) {
     exit;
 }
 
-const SBCM_VERSION = '1.2.0';
+const SBCM_VERSION = '1.3.0';
 define('SBCM_ZERO', str_repeat('0', 64));
 
 /* ====================================================================== */
@@ -50,40 +50,67 @@ function storage_dir(): string
     return $d;
 }
 
-/** Status-Katalog aus config.json – validiert und normalisiert. */
-function bcm(): array
+/**
+ * Status-Katalog aus config.json – validiert und normalisiert. Standorte kommen aus dem Browser (System), sobald dort
+ * welche gespeichert sind, sonst aus config.json. $raw = true: nur config.json (ohne Browser-Standorte).
+ */
+function bcm(bool $reload = false, bool $raw = false): array
 {
+    static $j = null;
     static $b = null;
-    if ($b !== null) {
-        return $b;
+    if ($reload) {
+        $b = null;
     }
-    $path = (string)cfg('app.json_path', __DIR__ . '/config.json');
-    $raw = @file_get_contents($path);
-    if ($raw === false) {
-        throw new RuntimeException('config.json nicht lesbar');
+    if ($j === null) {
+        $path = (string)cfg('app.json_path', __DIR__ . '/config.json');
+        $rawText = @file_get_contents($path);
+        if ($rawText === false) {
+            throw new RuntimeException('config.json nicht lesbar');
+        }
+        $j = json_decode($rawText, true, 64, JSON_THROW_ON_ERROR);
+        $errs = bcm_validate($j);
+        if ($errs) {
+            $j = null;
+            throw new RuntimeException('config.json ungültig: ' . implode('; ', $errs));
+        }
+        $j['by_key'] = [];
+        foreach ($j['statuses'] as $s) {
+            $sev = $s['severity'];
+            $s['exercise']           = !empty($s['exercise']);
+            $s['alarm_mail_allowed'] = $s['alarm_mail_allowed'] ?? ($sev !== 'ok');
+            $s['alarm_mail_default'] = $s['alarm_mail_default'] ?? false;
+            $s['require_validity']   = $s['require_validity'] ?? ($sev !== 'ok');
+            $s['allow_unlimited']    = $s['allow_unlimited'] ?? ($sev === 'ok');
+            $s['require_totp']       = $s['require_totp'] ?? in_array($sev, ['warn', 'critical'], true);
+            $j['by_key'][$s['key']]  = $s;
+        }
+        // Vorlage für die Ende-Mail (ältere config.json haben sie noch nicht)
+        $j['mail_templates']['alarm_end'] ??= ['subject' => '{prefix}Statusmeldung beendet: {label}', 'body' => [
+            '{prefix}Die Statusmeldung "{label}" ist nicht mehr gültig (zurückgenommen bzw. gelöst).', '', '{locations}',
+            'Aktuelle Informationen (Anmeldung erforderlich): {url}', '', 'Diese Nachricht wurde automatisch erstellt. Bitte nicht antworten.']];
+        $j['locations_by_id'] = [];
+        foreach ($j['locations'] ?? [] as $l) {
+            $l['phone'] = trim((string)($l['phone'] ?? ''));
+            $j['locations_by_id'][$l['id']] = $l;
+        }
     }
-    $j = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
-    $errs = bcm_validate($j);
-    if ($errs) {
-        throw new RuntimeException('config.json ungültig: ' . implode('; ', $errs));
+    if ($raw) {
+        return $j;
     }
-    $j['by_key'] = [];
-    foreach ($j['statuses'] as $s) {
-        $sev = $s['severity'];
-        $s['exercise']           = !empty($s['exercise']);
-        $s['alarm_mail_allowed'] = $s['alarm_mail_allowed'] ?? ($sev !== 'ok');
-        $s['alarm_mail_default'] = $s['alarm_mail_default'] ?? false;
-        $s['require_validity']   = $s['require_validity'] ?? ($sev !== 'ok');
-        $s['allow_unlimited']    = $s['allow_unlimited'] ?? ($sev === 'ok');
-        $s['require_totp']       = $s['require_totp'] ?? in_array($sev, ['warn', 'critical'], true);
-        $j['by_key'][$s['key']]  = $s;
+    if ($b === null) {
+        $b = $j;
+        $web = setting_get('locations');
+        if (is_array($web)) {
+            $b['locations'] = [];
+            $b['locations_by_id'] = [];
+            foreach (locations_all() as $l) {
+                unset($l['emails']); // Adressen nie über den Katalog weiterreichen
+                $b['locations'][] = $l;
+                $b['locations_by_id'][$l['id']] = $l;
+            }
+        }
     }
-    $j['locations_by_id'] = [];
-    foreach ($j['locations'] ?? [] as $l) {
-        $l['phone'] = trim((string)($l['phone'] ?? ''));
-        $j['locations_by_id'][$l['id']] = $l;
-    }
-    return $b = $j;
+    return $b;
 }
 
 /** Strukturprüfung der config.json (Fehler = Liste von Texten). */
@@ -413,8 +440,45 @@ function db(): PDO
         } catch (Throwable $e) {
             install_schema($pdo);
         }
+        schema_upgrade($pdo);
     }
     return $pdo;
+}
+
+/**
+ * Version 1.3: mehrere gleichzeitige Meldungen (Spalte msg_id). Beim Nachrüsten wird die bisherige Länge des
+ * Protokolls gemerkt: Ältere Statuseinträge galten noch "einer löst den anderen ab" (siehe status_board()).
+ */
+function schema_upgrade(PDO $pdo): void
+{
+    try {
+        $pdo->query('SELECT msg_id FROM ' . t('status') . ' LIMIT 1')->fetchAll();
+    } catch (Throwable $e) {
+        try {
+            $pdo->exec('ALTER TABLE ' . t('status') . ' ADD COLUMN msg_id BIGINT NULL');
+        } catch (Throwable $e2) {
+            error_log('Status-BCM: ALTER TABLE fehlgeschlagen: ' . $e2->getMessage());
+            throw new SbcmSetupError('Datenbank-Update auf Version ' . SBCM_VERSION . ' nicht möglich: Dem Datenbank-Benutzer fehlt das Recht ALTER. '
+                . 'Bitte im Kundenmenü des Hosters für diesen Benutzer ALTER erlauben (oder in phpMyAdmin ausführen: ALTER TABLE '
+                . t('status') . ' ADD COLUMN msg_id BIGINT NULL;) und die Seite neu laden.');
+        }
+    }
+    // Stichtag nur einmal festhalten (auch wenn die Spalte von Hand angelegt wurde): Bis hier galt "eine Meldung"
+    $q = $pdo->prepare('SELECT v FROM ' . t('kv') . ' WHERE k = ?');
+    $q->execute(['multi_since_seq']);
+    if ($q->fetchColumn() === false) {
+        $seq = (int)$pdo->query('SELECT COALESCE(MAX(seq), 0) FROM ' . t('audit'))->fetchColumn();
+        try {
+            $pdo->prepare('INSERT INTO ' . t('kv') . ' (k, v) VALUES (?, ?)')->execute(['multi_since_seq', (string)$seq]);
+        } catch (Throwable $e) {
+            // gleichzeitiger Aufruf hat den Wert schon gesetzt
+        }
+    }
+}
+
+/** Fehler, deren Text Betreiber ohne Kommandozeile direkt im Browser sehen sollen (keine Geheimnisse darin). */
+class SbcmSetupError extends RuntimeException
+{
 }
 
 function db_driver(): string
@@ -479,7 +543,7 @@ function install_schema(PDO $pdo): void
                 audience VARCHAR(24) NOT NULL, state VARCHAR(12) NOT NULL DEFAULT 'active',
                 payload_enc MEDIUMTEXT NOT NULL, row_mac CHAR(64) NOT NULL DEFAULT '',
                 reminder_count INT NOT NULL DEFAULT 0, last_reminder_at CHAR(19) NULL,
-                closed_at CHAR(19) NULL, closed_by VARCHAR(64) NULL,
+                closed_at CHAR(19) NULL, closed_by VARCHAR(64) NULL, msg_id BIGINT NULL,
                 PRIMARY KEY (id), KEY idx_state (state), KEY idx_created (created_at)
             )$tail",
             "CREATE TABLE IF NOT EXISTS $a (
@@ -529,7 +593,7 @@ function install_schema(PDO $pdo): void
                 audience TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'active',
                 payload_enc TEXT NOT NULL, row_mac TEXT NOT NULL DEFAULT '',
                 reminder_count INTEGER NOT NULL DEFAULT 0, last_reminder_at TEXT NULL,
-                closed_at TEXT NULL, closed_by TEXT NULL
+                closed_at TEXT NULL, closed_by TEXT NULL, msg_id INTEGER NULL
             )",
             "CREATE INDEX IF NOT EXISTS {$s}_state ON $s (state)",
             "CREATE TABLE IF NOT EXISTS $a (
@@ -633,6 +697,9 @@ function setting_set(string $k, $v): void
 {
     kv_set('set:' . $k, enc(json_enc($v), 'setting:' . $k, 'settings'));
     setting_get($k, true);
+    if ($k === 'locations') {
+        bcm(true);
+    }
 }
 
 /** Einstellung, deren Eintrag in kv vorhanden, aber nicht entschlüsselbar ist (Manipulation, falscher Master-Key). */
@@ -686,49 +753,382 @@ function stage1_change(string $pw, string $pw2, string $actor, array $how = []):
     return [];
 }
 
-/** ALARM-Empfänger aus dem Browser (Liste im Klartext, als Ganzes verschlüsselt gespeichert). */
+/** ALARM-Empfänger der Version 1.2 aus dem Browser (werden beim ersten Speichern der Alarmkreise übernommen). */
 function recipients_web(): array
 {
     $v = setting_get('recipients');
     return is_array($v) ? array_values(array_filter(array_map('strval', $v), fn($e) => filter_var($e, FILTER_VALIDATE_EMAIL))) : [];
 }
 
-/** Empfänger hinzufügen (mehrere durch Zeilenumbruch, Komma oder Semikolon getrennt). Rückgabe: [neu, Fehler] */
-function recipients_add(string $text, string $actor, array $how = []): array
+/** Bisherige Empfänger (Browser 1.2 + config.local.inc.php) ohne Doppelte. */
+function legacy_recipients(): array
 {
-    $new = [];
+    $out = [];
+    foreach (recipients_web() as $e) {
+        $out[$e] = $e;
+    }
+    foreach ((array)cfg('mail.recipients', []) as $r) {
+        try {
+            $e = strtolower(trim(cfg_secret((string)$r)));
+        } catch (Throwable $ex) {
+            error_log('Status-BCM: Empfänger nicht entschlüsselbar');
+            continue;
+        }
+        if (filter_var($e, FILTER_VALIDATE_EMAIL)) {
+            $out[$e] = $e;
+        }
+    }
+    return array_values($out);
+}
+
+/** E-Mail-Liste aus Freitext (Zeilen, Komma, Semikolon). Rückgabe: [gültige, ungültige] */
+function parse_email_list(string $text): array
+{
+    $ok = [];
     $bad = [];
     foreach (preg_split('/[\s,;]+/', strtolower($text), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $m) {
-        filter_var($m, FILTER_VALIDATE_EMAIL) ? $new[$m] = $m : $bad[] = $m;
-    }
-    if ($bad || !$new) {
-        return [0, $bad ? 'Ungültige Adresse(n): ' . implode(', ', array_map('mask_email', $bad)) : 'Bitte mindestens eine Adresse angeben.'];
-    }
-    return tx(function () use ($new, $actor, $how) {
-        $cur = recipients_web();
-        $add = array_values(array_diff(array_values($new), $cur, alarm_recipients()));
-        if ($add) {
-            setting_set('recipients', array_merge($cur, $add));
-            audit('setting.recipient_add', 'recipients', ['count' => count($add), 'masked' => array_map('mask_email', $add), 'how' => $how],
-                $actor, str_starts_with($actor, 'system:') ? 0 : 2);
+        if (filter_var($m, FILTER_VALIDATE_EMAIL)) {
+            $ok[$m] = $m;
+        } else {
+            $bad[] = $m;
         }
-        return [count($add), null];
+    }
+    return [array_values($ok), $bad];
+}
+
+function slug_id(string $name, array $taken, string $fallback): string
+{
+    $map = ['ä' => 'ae', 'ö' => 'oe', 'ü' => 'ue', 'ß' => 'ss'];
+    $id = trim((string)preg_replace('/[^a-z0-9]+/', '-', strtr(mb_strtolower($name), $map)), '-');
+    $id = substr($id, 0, 24) ?: $fallback;
+    $base = $id;
+    for ($i = 2; in_array($id, $taken, true); $i++) {
+        $id = $base . '-' . $i;
+    }
+    return $id;
+}
+
+function setting_level(string $actor): int
+{
+    return str_starts_with($actor, 'system:') ? 0 : 2;
+}
+
+/* ---- Alarmkreise (z. B. IT, BOA/Krisenstab, Leitung) -------------------- */
+
+/** Liste [id, name, emails[]]. Ohne gespeicherte Kreise: bisherige Empfänger als Kreis "Allgemein". */
+function alarm_circles(): array
+{
+    $v = setting_get('circles');
+    if (!is_array($v)) {
+        return [['id' => 'allgemein', 'name' => 'Allgemein', 'emails' => legacy_recipients()]];
+    }
+    $out = [];
+    foreach ($v as $c) {
+        if (is_array($c) && preg_match('/^[a-z0-9-]{1,32}$/', (string)($c['id'] ?? ''))) {
+            $out[] = ['id' => (string)$c['id'], 'name' => (string)($c['name'] ?? $c['id']),
+                'emails' => array_values(array_filter(array_map('strval', (array)($c['emails'] ?? [])), fn($e) => filter_var($e, FILTER_VALIDATE_EMAIL)))];
+        }
+    }
+    return $out;
+}
+
+/** Alle ALARM-Adressen aller Kreise (für Prüfung und Hinweise). */
+function alarm_recipients(): array
+{
+    $out = [];
+    foreach (alarm_circles() as $c) {
+        foreach ($c['emails'] as $e) {
+            $out[$e] = $e;
+        }
+    }
+    return array_values($out);
+}
+
+function circles_store(array $circles, string $action, array $details, string $actor, array $how): void
+{
+    tx(function () use ($circles, $action, $details, $actor, $how) {
+        setting_set('circles', array_values($circles));
+        audit('setting.' . $action, 'circles', $details + ['how' => $how], $actor, setting_level($actor));
     });
 }
 
-function recipients_remove(int $index, string $actor, array $how = []): bool
+function circle_create(string $name, string $emails, string $actor, array $how = []): ?string
 {
-    return tx(function () use ($index, $actor, $how) {
-        $cur = recipients_web();
-        if (!isset($cur[$index])) {
-            return false;
+    $name = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $name) ?? '');
+    if ($name === '' || mb_strlen($name) > 40) {
+        return 'Name des Kreises: 1 bis 40 Zeichen.';
+    }
+    [$ok, $bad] = parse_email_list($emails);
+    if ($bad) {
+        return 'Ungültige Adresse(n): ' . implode(', ', array_map('mask_email', $bad));
+    }
+    $c = alarm_circles();
+    if (in_array(mb_strtolower($name), array_map(fn($x) => mb_strtolower($x['name']), $c), true)) {
+        return 'Einen Kreis mit diesem Namen gibt es schon.';
+    }
+    $id = slug_id($name, array_column($c, 'id'), 'kreis');
+    $c[] = ['id' => $id, 'name' => $name, 'emails' => $ok];
+    circles_store($c, 'circle_create', ['circle' => $name, 'count' => count($ok)], $actor, $how);
+    return null;
+}
+
+/** Adressen eines Kreises ergänzen ($add) bzw. entfernen ($remove = Positionen). */
+function circle_update(string $id, string $add, array $remove, string $actor, array $how = []): ?string
+{
+    $c = alarm_circles();
+    $i = array_search($id, array_column($c, 'id'), true);
+    if ($i === false) {
+        return 'Kreis nicht gefunden.';
+    }
+    [$ok, $bad] = parse_email_list($add);
+    if ($bad) {
+        return 'Ungültige Adresse(n): ' . implode(', ', array_map('mask_email', $bad));
+    }
+    $gone = [];
+    foreach ($remove as $r) {
+        if (isset($c[$i]['emails'][(int)$r])) {
+            $gone[] = $c[$i]['emails'][(int)$r];
         }
-        $gone = $cur[$index];
-        array_splice($cur, $index, 1);
-        setting_set('recipients', $cur);
-        audit('setting.recipient_remove', 'recipients', ['masked' => [mask_email($gone)], 'how' => $how], $actor, str_starts_with($actor, 'system:') ? 0 : 2);
-        return true;
+    }
+    $new = array_values(array_diff($ok, $c[$i]['emails']));
+    if (!$new && !$gone) {
+        return 'Keine Änderung (Adressen bereits vorhanden oder nichts ausgewählt).';
+    }
+    $c[$i]['emails'] = array_values(array_merge(array_diff($c[$i]['emails'], $gone), $new));
+    circles_store($c, 'circle_update', ['circle' => $c[$i]['name'], 'masked' => array_merge(
+        array_map(fn($e) => '+' . mask_email($e), $new), array_map(fn($e) => '-' . mask_email($e), $gone))], $actor, $how);
+    return null;
+}
+
+function circle_delete(string $id, string $actor, array $how = []): ?string
+{
+    $c = alarm_circles();
+    $i = array_search($id, array_column($c, 'id'), true);
+    if ($i === false) {
+        return 'Kreis nicht gefunden.';
+    }
+    $name = $c[$i]['name'];
+    array_splice($c, $i, 1);
+    circles_store($c, 'circle_delete', ['circle' => $name], $actor, $how);
+    return null;
+}
+
+/* ---- Standorte (Name, Durchwahl, E-Mail der Standortverwaltung) -------- */
+
+/** Standorte inkl. E-Mail-Adressen: aus dem Browser (System) oder, solange dort nichts gespeichert ist, aus config.json. */
+function locations_all(): array
+{
+    $v = setting_get('locations');
+    $src = is_array($v) ? $v : (array)(bcm(false, true)['locations'] ?? []);
+    $out = [];
+    foreach ($src as $l) {
+        if (!is_array($l) || !preg_match('/^[a-z0-9_-]{2,32}$/', (string)($l['id'] ?? '')) || trim((string)($l['name'] ?? '')) === '') {
+            continue;
+        }
+        $out[] = ['id' => (string)$l['id'], 'name' => trim((string)$l['name']), 'phone' => trim((string)($l['phone'] ?? '')),
+            'emails' => array_values(array_filter(array_map('strval', (array)($l['emails'] ?? [])), fn($e) => filter_var($e, FILTER_VALIDATE_EMAIL)))];
+    }
+    return $out;
+}
+
+function location_emails(string $id): array
+{
+    foreach (locations_all() as $l) {
+        if ($l['id'] === $id) {
+            return $l['emails'];
+        }
+    }
+    return [];
+}
+
+function locations_store(array $locs, string $action, array $details, string $actor, array $how): void
+{
+    tx(function () use ($locs, $action, $details, $actor, $how) {
+        setting_set('locations', array_values($locs));
+        audit('setting.' . $action, 'locations', $details + ['how' => $how], $actor, setting_level($actor));
     });
+    bcm(true);
+}
+
+/** Standort anlegen ($id = '') oder ändern. $remove = Positionen der zu entfernenden Adressen. */
+function location_save(string $id, string $name, string $phone, string $add, array $remove, string $actor, array $how = []): ?string
+{
+    $name = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $name) ?? '');
+    $phone = trim($phone);
+    if ($name === '' || mb_strlen($name) > 80) {
+        return 'Name des Standorts: 1 bis 80 Zeichen.';
+    }
+    if ($hits = critical_terms_in($name, bcm())) {
+        return 'Der Name enthält kritische Begriffe (' . implode(', ', $hits) . ').';
+    }
+    if ($phone !== '' && !preg_match('/^[0-9+ ()\/-]{3,40}$/', $phone)) {
+        return 'Durchwahl: nur Ziffern, +, Leerzeichen, ( ) / -';
+    }
+    [$ok, $bad] = parse_email_list($add);
+    if ($bad) {
+        return 'Ungültige Adresse(n): ' . implode(', ', array_map('mask_email', $bad));
+    }
+    $locs = locations_all();
+    if ($id === '') {
+        $id = slug_id($name, array_column($locs, 'id'), 'standort');
+        $id = strlen($id) < 2 ? $id . '-1' : $id;
+        $locs[] = ['id' => $id, 'name' => $name, 'phone' => $phone, 'emails' => $ok];
+        locations_store($locs, 'location_create', ['location' => $name, 'count' => count($ok)], $actor, $how);
+        return null;
+    }
+    $i = array_search($id, array_column($locs, 'id'), true);
+    if ($i === false) {
+        return 'Standort nicht gefunden.';
+    }
+    $gone = [];
+    foreach ($remove as $r) {
+        if (isset($locs[$i]['emails'][(int)$r])) {
+            $gone[] = $locs[$i]['emails'][(int)$r];
+        }
+    }
+    $new = array_values(array_diff($ok, $locs[$i]['emails']));
+    $before = $locs[$i]['name'];
+    $locs[$i] = ['id' => $id, 'name' => $name, 'phone' => $phone,
+        'emails' => array_values(array_merge(array_diff($locs[$i]['emails'], $gone), $new))];
+    locations_store($locs, 'location_update', ['location' => $name, 'before' => $before !== $name ? $before : null, 'masked' => array_merge(
+        array_map(fn($e) => '+' . mask_email($e), $new), array_map(fn($e) => '-' . mask_email($e), $gone))], $actor, $how);
+    return null;
+}
+
+function location_delete(string $id, string $actor, array $how = []): ?string
+{
+    $locs = locations_all();
+    $i = array_search($id, array_column($locs, 'id'), true);
+    if ($i === false) {
+        return 'Standort nicht gefunden.';
+    }
+    $name = $locs[$i]['name'];
+    array_splice($locs, $i, 1);
+    locations_store($locs, 'location_delete', ['location' => $name], $actor, $how);
+    return null;
+}
+
+/* ---- Kontaktangaben (Notfallnummer, E-Mail, Videokonferenz) ------------- */
+
+function contacts_all(): array
+{
+    $v = setting_get('contacts');
+    return is_array($v) ? array_values(array_filter($v, fn($c) => is_array($c) && isset($c['id'], $c['name']))) : [];
+}
+
+/** Prüft und normalisiert eine Kontaktangabe. Rückgabe: [Kontakt|null, Fehler|null] */
+function contact_normalize(array $in): array
+{
+    $c = [];
+    foreach (['name' => 60, 'phone' => 40, 'email' => 120, 'platform' => 40, 'url' => 300, 'meeting' => 80] as $k => $max) {
+        $c[$k] = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($in[$k] ?? '')) ?? '');
+        if (mb_strlen($c[$k]) > $max) {
+            return [null, "Feld $k ist zu lang (max. $max Zeichen)."];
+        }
+    }
+    if ($c['name'] === '') {
+        return [null, 'Bitte eine Bezeichnung angeben, z. B. "Krisenstab-Telefonkonferenz".'];
+    }
+    if ($c['phone'] === '' && $c['email'] === '' && $c['url'] === '' && $c['meeting'] === '') {
+        return [null, 'Bitte mindestens Rufnummer, E-Mail, Link oder Konferenz-ID angeben.'];
+    }
+    if ($c['phone'] !== '' && !preg_match('/^[0-9+ ()\/-]{3,40}$/', $c['phone'])) {
+        return [null, 'Rufnummer: nur Ziffern, +, Leerzeichen, ( ) / -'];
+    }
+    if ($c['email'] !== '' && !filter_var($c['email'], FILTER_VALIDATE_EMAIL)) {
+        return [null, 'E-Mail-Adresse ungültig.'];
+    }
+    if ($c['url'] !== '' && (!str_starts_with(strtolower($c['url']), 'https://') || !filter_var($c['url'], FILTER_VALIDATE_URL))) {
+        return [null, 'Link: nur vollständige https://-Adressen.'];
+    }
+    if ($c['meeting'] !== '' && !preg_match('/^[\p{L}0-9 #*:.,+\/_-]+$/u', $c['meeting'])) {
+        return [null, 'Konferenz-ID/PIN: nur Buchstaben, Ziffern, Leerzeichen und # * : . , + / _ -'];
+    }
+    if ($hits = critical_terms_in($c['name'] . "\n" . $c['platform'], bcm())) {
+        return [null, 'Die Bezeichnung enthält kritische Begriffe (' . implode(', ', $hits) . ').'];
+    }
+    $c['email'] = strtolower($c['email']);
+    return [$c, null];
+}
+
+function contacts_store(array $list, string $action, array $details, string $actor, array $how): void
+{
+    tx(function () use ($list, $action, $details, $actor, $how) {
+        setting_set('contacts', array_values($list));
+        audit('setting.' . $action, 'contacts', $details + ['how' => $how], $actor, setting_level($actor));
+    });
+}
+
+function contact_save(string $id, array $in, string $actor, array $how = []): ?string
+{
+    [$c, $err] = contact_normalize($in);
+    if ($err) {
+        return $err;
+    }
+    $list = contacts_all();
+    if ($id === '') {
+        $c['id'] = slug_id($c['name'], array_column($list, 'id'), 'kontakt');
+        $list[] = $c;
+        contacts_store($list, 'contact_create', ['contact' => $c['name']], $actor, $how);
+        return null;
+    }
+    $i = array_search($id, array_column($list, 'id'), true);
+    if ($i === false) {
+        return 'Kontakt nicht gefunden.';
+    }
+    $c['id'] = $id;
+    $list[$i] = $c;
+    contacts_store($list, 'contact_update', ['contact' => $c['name']], $actor, $how);
+    return null;
+}
+
+function contact_delete(string $id, string $actor, array $how = []): ?string
+{
+    $list = contacts_all();
+    $i = array_search($id, array_column($list, 'id'), true);
+    if ($i === false) {
+        return 'Kontakt nicht gefunden.';
+    }
+    $name = $list[$i]['name'];
+    array_splice($list, $i, 1);
+    contacts_store($list, 'contact_delete', ['contact' => $name], $actor, $how);
+    return null;
+}
+
+/* ---- Betreff-Präfixe der ALARM-Mail -------------------------------------- */
+
+const SBCM_PREFIX_DEFAULTS = ['new' => '[ALARM]', 'update' => '[Aktualisierung]', 'end' => '[Ende]'];
+
+function mail_prefixes(): array
+{
+    $v = setting_get('mail_prefix');
+    $out = SBCM_PREFIX_DEFAULTS;
+    foreach (array_keys($out) as $k) {
+        if (is_array($v) && isset($v[$k]) && is_string($v[$k])) {
+            $out[$k] = $v[$k];
+        }
+    }
+    return $out;
+}
+
+function mail_prefixes_set(array $in, string $actor, array $how = []): ?string
+{
+    $new = [];
+    foreach (array_keys(SBCM_PREFIX_DEFAULTS) as $k) {
+        $p = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($in[$k] ?? '')) ?? '');
+        if (mb_strlen($p) > 30) {
+            return 'Präfixe: höchstens 30 Zeichen.';
+        }
+        if ($hits = critical_terms_in($p, bcm())) {
+            return 'Präfix enthält kritische Begriffe (' . implode(', ', $hits) . ').';
+        }
+        $new[$k] = $p;
+    }
+    tx(function () use ($new, $actor, $how) {
+        setting_set('mail_prefix', $new);
+        audit('setting.mail_prefix', 'mail', ['prefixes' => $new, 'how' => $how], $actor, setting_level($actor));
+    });
+    return null;
 }
 
 function cc1_change(string $mail, string $actor, array $how = []): ?string
@@ -889,7 +1289,7 @@ function bootstrap(): void
             http_response_code(500);
             header('Content-Type: text/plain; charset=utf-8');
         }
-        echo "Interner Fehler. Bitte später erneut versuchen.\n";
+        echo $e instanceof SbcmSetupError ? $e->getMessage() . "\n" : "Interner Fehler. Bitte später erneut versuchen.\n";
     });
     send_security_headers();
     sess_start();
@@ -1470,8 +1870,8 @@ function audit_describe(string $action, array $d): string
     $labels = [
         'login1.ok' => 'Anmeldung Stufe 1', 'login2.ok' => 'Anmeldung Stufe 2',
         'login2.fail' => 'Fehlgeschlagene Anmeldung Stufe 2', 'totp.fail' => 'Ungültiger TOTP-Code',
-        'status.set' => 'Status gesetzt', 'status.extend' => 'Status verlängert',
-        'status.end' => 'Status beendet', 'status.auto_end' => 'Status automatisch zurückgesetzt',
+        'status.set' => 'Meldung gesetzt', 'status.extend' => 'Meldung verlängert',
+        'status.end' => 'Meldung beendet', 'status.auto_end' => 'Meldung automatisch beendet', 'status.update' => 'Meldung geändert',
         'mail.alarm' => 'ALARM-Mail versendet', 'mail.reminder' => 'Erinnerung versendet',
         'mail.anchor' => 'Audit-Anker versendet', 'mail.autorevert' => 'Hinweis Rücksetzung versendet',
         'mail.pw_reminder' => 'Passwort-Erinnerung versendet', 'logout' => 'Abmeldung',
@@ -1482,9 +1882,33 @@ function audit_describe(string $action, array $d): string
         'setting.stage1' => 'Zugangspasswort Stufe 1 geändert', 'setting.cc1' => 'Kopie-Adresse (cc_default_mail1) geändert',
         'setting.recipient_add' => 'ALARM-Empfänger hinzugefügt', 'setting.recipient_remove' => 'ALARM-Empfänger entfernt',
         'mail.test' => 'Testmail versendet',
+        'setting.circle_create' => 'Alarmkreis angelegt', 'setting.circle_update' => 'Alarmkreis geändert', 'setting.circle_delete' => 'Alarmkreis gelöscht',
+        'setting.location_create' => 'Standort angelegt', 'setting.location_update' => 'Standort geändert', 'setting.location_delete' => 'Standort gelöscht',
+        'setting.contact_create' => 'Kontakt angelegt', 'setting.contact_update' => 'Kontakt geändert', 'setting.contact_delete' => 'Kontakt gelöscht',
+        'setting.mail_prefix' => 'Betreff-Präfixe geändert',
     ];
     $s = $labels[$action] ?? $action;
     $parts = [];
+    if (isset($d['msg'])) {
+        $parts[] = 'Meldung #' . (int)$d['msg'];
+    }
+    if (($d['mode'] ?? '') === 'end' && isset($d['before']['key'])) {
+        $parts[] = (string)($d['before']['label'] ?? $d['before']['key']);
+    }
+    if (isset($d['kind'])) {
+        $parts[] = ['new' => 'neu', 'update' => 'Aktualisierung', 'end' => 'Ende'][$d['kind']] ?? (string)$d['kind'];
+    }
+    if (!empty($d['circles']) && is_array($d['circles'])) {
+        $parts[] = 'Kreise: ' . implode(', ', array_map('strval', $d['circles']));
+    }
+    if (!empty($d['location_recipients'])) {
+        $parts[] = 'Standortadressen: ' . (int)$d['location_recipients'];
+    }
+    foreach (['circle' => 'Kreis', 'location' => 'Standort', 'contact' => 'Kontakt'] as $f => $lbl) {
+        if (!empty($d[$f]) && is_string($d[$f])) {
+            $parts[] = $lbl . ': ' . $d[$f];
+        }
+    }
     if (isset($d['after']['key'])) {
         $parts[] = ($d['before']['key'] ?? '–') . ' → ' . $d['after']['key'];
         if (array_key_exists('valid_until', $d['after'])) {
@@ -1528,7 +1952,7 @@ function audit_describe(string $action, array $d): string
 /* Status (verschlüsselte Nutzdaten, Zeilen-MAC, lückenlose Historie)     */
 /* ====================================================================== */
 
-function build_payload(array $def, array $locIds, string $note = ''): array
+function build_payload(array $def, array $locIds, string $note = '', array $contactIds = []): array
 {
     $b = bcm();
     // Optionale Ausweichrufnummer je Status (z. B. Mobilnummer bei eingeschränkter Festnetz-Erreichbarkeit)
@@ -1542,17 +1966,33 @@ function build_payload(array $def, array $locIds, string $note = ''): array
         $own = $l['phone'] !== '';
         $locs[] = ['id' => $id, 'name' => $l['name'], 'phone' => $own ? $l['phone'] : $fallback, 'default_phone' => !$own];
     }
+    $contacts = [];
+    foreach ($contactIds ? contacts_all() : [] as $c) {
+        if (in_array($c['id'], $contactIds, true)) {
+            $contacts[] = $c;
+        }
+    }
     return [
         'label' => $def['label'], 'text' => $def['text'], 'severity' => $def['severity'],
         'exercise' => (bool)$def['exercise'], 'audience' => $def['audience'],
-        'locations' => $locs, 'default_phone' => $fallback, 'note' => $note,
+        'locations' => $locs, 'default_phone' => $fallback, 'contacts' => $contacts, 'note' => $note,
     ];
+}
+
+/** Meldungs-Nummer: alle Versionen (Verlängerung, Änderung) einer Meldung teilen sie; die erste Zeile hat msg_id NULL. */
+function status_msg(array $row): int
+{
+    return isset($row['msg_id']) && $row['msg_id'] !== null ? (int)$row['msg_id'] : (int)$row['id'];
 }
 
 function status_row_mac(array $r, int $id): string
 {
-    return mac('row', implode('|', [$id, $r['status_key'], $r['severity'], $r['author'], $r['created_at'],
-        $r['valid_until'] ?? '', (int)$r['alarm_mail'], $r['audience'], $r['payload_enc']]));
+    $parts = [$id, $r['status_key'], $r['severity'], $r['author'], $r['created_at'],
+        $r['valid_until'] ?? '', (int)$r['alarm_mail'], $r['audience'], $r['payload_enc']];
+    if (isset($r['msg_id']) && $r['msg_id'] !== null && (int)$r['msg_id'] !== $id) {
+        $parts[] = 'msg:' . (int)$r['msg_id'];
+    }
+    return mac('row', implode('|', $parts));
 }
 
 function status_decode(array $row): array
@@ -1568,20 +2008,116 @@ function status_decode(array $row): array
     return $row;
 }
 
+const SBCM_STATUS_ACTIONS = ['status.set', 'status.extend', 'status.update', 'status.end', 'status.auto_end'];
+
+/**
+ * Alle Meldungen für die Anzeige. Maßgeblich ist das Audit-Log (HMAC-Kette), nicht die Spalte state: Es wird
+ * nachgespielt, welche Meldungen gesetzt, verlängert/geändert und beendet wurden. Weicht die Datenbank davon ab
+ * (z. B. eine alte Zeile wieder auf "active" gesetzt), erscheint die Meldung als "nicht verifiziert".
+ *
+ * Rückgabe: live (gültig, nach Schwere sortiert), recent (abgelaufen oder beendet, höchstens display.keep_hours
+ * lang ausgegraut), stale (abgelaufen, aber nicht beendet und nicht mehr angezeigt), unverified.
+ */
+function status_board(?int $nowTs = null): array
+{
+    $now = $nowTs ?? time();
+    $keep = max(0, (int)cfg('display.keep_hours', 48)) * 3600;
+    $def = bcm()['default_status'];
+    $rows = [];
+    foreach (db()->query('SELECT * FROM ' . t('status')) as $r) {
+        $rows[(int)$r['id']] = $r;
+    }
+    $since = (int)(kv_get('multi_since_seq') ?? 0);
+    $active = [];
+    $ended = [];
+    $q = db()->prepare('SELECT seq, ts, action, object FROM ' . t('audit') . ' WHERE action IN (' . implode(',', array_fill(0, count(SBCM_STATUS_ACTIONS), '?'))
+        . ') ORDER BY seq');
+    $q->execute(SBCM_STATUS_ACTIONS);
+    foreach ($q as $e) {
+        $id = (int)substr((string)$e['object'], 7);
+        if ((int)$e['seq'] <= $since) {
+            // bis Version 1.2: genau ein Status, jeder Eintrag löst den vorigen ab
+            $active = [$id => $id];
+            $ended = [];
+            continue;
+        }
+        $msg = isset($rows[$id]) ? status_msg($rows[$id]) : $id;
+        if (in_array($e['action'], ['status.end', 'status.auto_end'], true)) {
+            unset($active[$msg]);
+            $ended[$msg] = [$id, (string)$e['ts']];
+        } else {
+            $active[$msg] = $id;
+            unset($ended[$msg]);
+        }
+    }
+    $out = ['live' => [], 'recent' => [], 'stale' => [], 'unverified' => []];
+    $legacyNormal = fn(array $r) => $r['status_key'] === $def && $r['severity'] === 'ok';
+    foreach ($active as $id) {
+        if (!isset($rows[$id])) {
+            continue;
+        }
+        $r = status_decode($rows[$id]);
+        if ($legacyNormal($r)) {
+            continue;
+        }
+        if ($r['state'] !== 'active' || !$r['payload'] || !$r['mac_ok']) {
+            $r['mac_ok'] = false;
+            $out['unverified'][] = $r;
+            continue;
+        }
+        $r['msg'] = status_msg($r);
+        if (!empty($r['valid_until']) && utc_ts((string)$r['valid_until']) <= $now) {
+            $r['gone'] = 'expired';
+            $r['gone_at'] = $r['valid_until'];
+            $out[$now - utc_ts((string)$r['valid_until']) < $keep ? 'recent' : 'stale'][] = $r;
+        } else {
+            $out['live'][] = $r;
+        }
+    }
+    foreach ($ended as [$id, $ts]) {
+        if (!isset($rows[$id]) || $now - utc_ts($ts) >= $keep) {
+            continue;
+        }
+        $r = status_decode($rows[$id]);
+        if ($legacyNormal($r) || !$r['payload']) {
+            continue;
+        }
+        $r['mac_ok'] = $r['mac_ok'] && $r['state'] === 'ended';
+        $r['msg'] = status_msg($r);
+        $r['gone'] = 'ended';
+        $r['gone_at'] = $ts;
+        $out['recent'][] = $r;
+    }
+    // Zeilen, die laut Datenbank aktiv sind, laut Protokoll aber nicht
+    foreach ($rows as $id => $r) {
+        if ($r['state'] === 'active' && !in_array($id, $active, true) && !$legacyNormal($r)) {
+            $d = status_decode($r);
+            $d['mac_ok'] = false;
+            $out['unverified'][] = $d;
+        }
+    }
+    $rank = ['critical' => 0, 'warn' => 1, 'info' => 2, 'ok' => 3];
+    usort($out['live'], fn($x, $y) => [$rank[$x['severity']] ?? 9, $y['created_at']] <=> [$rank[$y['severity']] ?? 9, $x['created_at']]);
+    usort($out['recent'], fn($x, $y) => strcmp((string)$y['gone_at'], (string)$x['gone_at']));
+    return $out;
+}
+
+/** Erste gültige Meldung (wichtigste) oder null. */
 function status_current(): ?array
 {
-    $r = db()->query('SELECT * FROM ' . t('status') . " WHERE state = 'active' ORDER BY id DESC LIMIT 1")->fetch();
-    if (!$r) {
-        return null;
+    return status_board()['live'][0] ?? null;
+}
+
+/** Aktive Meldung (laut Protokoll), auf die sich Verlängern/Ändern/Beenden bezieht – gültig oder abgelaufen. */
+function status_target(int $id): ?array
+{
+    $b = status_board();
+    foreach (array_merge($b['live'], $b['recent'], $b['stale']) as $r) {
+        if ((int)$r['id'] === $id && ($r['gone'] ?? '') !== 'ended') {
+            return $r;
+        }
     }
-    $r = status_decode($r);
-    // Der aktive Status muss der zuletzt im Audit-Log gesetzte sein (erkennt z. B. das "Reaktivieren" alter Zeilen).
-    $q = db()->prepare('SELECT object FROM ' . t('audit') . ' WHERE action IN (?,?,?,?) ORDER BY seq DESC LIMIT 1');
-    $q->execute(['status.set', 'status.extend', 'status.end', 'status.auto_end']);
-    if ((string)$q->fetchColumn() !== 'status:' . $r['id']) {
-        $r['mac_ok'] = false;
-    }
-    return $r;
+    return null;
 }
 
 function status_history(int $limit = 15): array
@@ -1593,9 +2129,15 @@ function status_history(int $limit = 15): array
     return $out;
 }
 
+function status_brief(array $row, array $payload): array
+{
+    return ['id' => (int)$row['id'], 'key' => $row['status_key'], 'valid_until' => $row['valid_until'],
+        'locations' => array_column($payload['locations'] ?? [], 'id'), 'contacts' => array_column($payload['contacts'] ?? [], 'name')];
+}
+
 /**
- * Setzt einen neuen Status (löst den bisherigen ab) und schreibt atomar das Audit-Log.
- * $spec: mode(set|extend|end), key, loc_ids[], valid_until (UTC|null), alarm_mail(bool), note
+ * Meldung setzen (set), verlängern (extend) oder ändern (update) und atomar protokollieren.
+ * $spec: mode, key, target (Zeile bei extend/update), loc_ids[], contact_ids[], valid_until (UTC|null), alarm_mail, note
  */
 function status_create(array $spec, string $author, array $how = []): array
 {
@@ -1603,44 +2145,66 @@ function status_create(array $spec, string $author, array $how = []): array
     if (!$def) {
         throw new InvalidArgumentException('Unbekannter Status');
     }
-    $level = str_starts_with($author, 'system:') ? 0 : 2;
-    $payload = build_payload($def, (array)$spec['loc_ids'], (string)($spec['note'] ?? ''));
+    $payload = build_payload($def, (array)$spec['loc_ids'], (string)($spec['note'] ?? ''), (array)($spec['contact_ids'] ?? []));
     $now = now_utc();
     $pdo = db();
-
-    return tx(function () use ($pdo, $spec, $def, $author, $level, $payload, $now, $how) {
-        $cur = $pdo->query('SELECT id, status_key, valid_until FROM ' . t('status')
-            . " WHERE state = 'active' ORDER BY id DESC" . lock_clause())->fetch();
+    return tx(function () use ($pdo, $spec, $def, $author, $payload, $now, $how) {
         $before = null;
-        if ($cur) {
-            $pdo->prepare('UPDATE ' . t('status') . " SET state = 'superseded', closed_at = ?, closed_by = ? WHERE state = 'active'")
-                ->execute([$now, $author]);
-            $before = ['id' => (int)$cur['id'], 'key' => $cur['status_key'], 'valid_until' => $cur['valid_until']];
+        $msg = null;
+        if ($spec['mode'] !== 'set') {
+            $q = $pdo->prepare('SELECT * FROM ' . t('status') . " WHERE id = ? AND state = 'active'" . lock_clause());
+            $q->execute([(int)$spec['target']]);
+            $cur = $q->fetch();
+            if (!$cur || $cur['status_key'] !== $def['key']) {
+                throw new InvalidArgumentException('Die Meldung wurde inzwischen geändert oder beendet. Bitte neu laden.');
+            }
+            $cd = status_decode($cur);
+            $before = status_brief($cur, (array)$cd['payload']);
+            $msg = status_msg($cur);
+            $pdo->prepare('UPDATE ' . t('status') . " SET state = 'superseded', closed_at = ?, closed_by = ? WHERE id = ?")
+                ->execute([$now, $author, (int)$cur['id']]);
         }
         $row = [
             'status_key' => $def['key'], 'severity' => $def['severity'], 'author' => $author, 'created_at' => $now,
             'valid_until' => $spec['valid_until'] ?? null, 'alarm_mail' => !empty($spec['alarm_mail']) ? 1 : 0,
-            'audience' => $def['audience'], 'payload_enc' => enc(json_enc($payload), 'status.payload'),
+            'audience' => $def['audience'], 'payload_enc' => enc(json_enc($payload), 'status.payload'), 'msg_id' => $msg,
         ];
         $pdo->prepare('INSERT INTO ' . t('status')
-            . ' (status_key, severity, author, created_at, valid_until, alarm_mail, audience, state, payload_enc, row_mac)'
-            . " VALUES (?,?,?,?,?,?,?,'active',?,'')")
+            . ' (status_key, severity, author, created_at, valid_until, alarm_mail, audience, state, payload_enc, row_mac, msg_id)'
+            . " VALUES (?,?,?,?,?,?,?,'active',?,'',?)")
             ->execute([$row['status_key'], $row['severity'], $row['author'], $row['created_at'], $row['valid_until'],
-                $row['alarm_mail'], $row['audience'], $row['payload_enc']]);
+                $row['alarm_mail'], $row['audience'], $row['payload_enc'], $msg]);
         $id = (int)$pdo->lastInsertId();
         $pdo->prepare('UPDATE ' . t('status') . ' SET row_mac = ? WHERE id = ?')->execute([status_row_mac($row, $id), $id]);
-
-        $action = ['set' => 'status.set', 'extend' => 'status.extend', 'end' => 'status.end', 'auto_end' => 'status.auto_end'][$spec['mode']] ?? 'status.set';
+        $action = ['set' => 'status.set', 'extend' => 'status.extend', 'update' => 'status.update'][$spec['mode']] ?? 'status.set';
         audit($action, 'status:' . $id, [
-            'mode'   => $spec['mode'],
-            'before' => $before,
-            'after'  => ['id' => $id, 'key' => $def['key'], 'label' => $def['label'],
-                'locations' => array_column($payload['locations'], 'id'),
-                'valid_until' => $row['valid_until'], 'alarm_mail' => (bool)$row['alarm_mail']],
-            'how'    => $how,
-            'note'   => $spec['note'] ?? '',
-        ], $author, $level);
-        return ['id' => $id, 'payload' => $payload, 'valid_until' => $row['valid_until'], 'author' => $author];
+            'mode' => $spec['mode'], 'msg' => $msg ?? $id, 'before' => $before,
+            'after' => status_brief($row + ['id' => $id], $payload) + ['label' => $def['label'], 'alarm_mail' => (bool)$row['alarm_mail']],
+            'how' => $how, 'note' => $spec['note'] ?? '',
+        ], $author, setting_level($author));
+        return ['id' => $id, 'msg' => $msg ?? $id, 'payload' => $payload, 'valid_until' => $row['valid_until'], 'author' => $author];
+    });
+}
+
+/** Meldung beenden ("zurückgenommen/gelöst"). Die Zeile bleibt erhalten, sie wird nur als beendet markiert. */
+function status_end(int $rowId, string $author, array $how = [], string $note = '', bool $auto = false): array
+{
+    $pdo = db();
+    return tx(function () use ($pdo, $rowId, $author, $how, $note, $auto) {
+        $q = $pdo->prepare('SELECT * FROM ' . t('status') . " WHERE id = ? AND state = 'active'" . lock_clause());
+        $q->execute([$rowId]);
+        $cur = $q->fetch();
+        if (!$cur) {
+            throw new InvalidArgumentException('Die Meldung wurde inzwischen geändert oder beendet. Bitte neu laden.');
+        }
+        $d = status_decode($cur);
+        $now = now_utc();
+        $pdo->prepare('UPDATE ' . t('status') . " SET state = 'ended', closed_at = ?, closed_by = ? WHERE id = ?")->execute([$now, $author, $rowId]);
+        audit($auto ? 'status.auto_end' : 'status.end', 'status:' . $rowId, [
+            'mode' => 'end', 'msg' => status_msg($cur), 'before' => status_brief($cur, (array)$d['payload']) + ['label' => $d['payload']['label'] ?? ''],
+            'how' => $how, 'note' => $note,
+        ], $author, setting_level($author));
+        return ['id' => $rowId, 'msg' => status_msg($cur), 'payload' => (array)$d['payload'], 'valid_until' => $cur['valid_until'], 'author' => $author];
     });
 }
 
@@ -1649,51 +2213,83 @@ function spec_needs_totp(array $spec): bool
     if (cfg('auth.totp_enforce_all', false)) {
         return true;
     }
+    if (!empty($spec['alarm_mail'])) {
+        return true;
+    }
     if ($spec['mode'] === 'end') {
         return false;
     }
     $def = bcm()['by_key'][$spec['key']] ?? null;
-    return !empty($spec['alarm_mail']) || ($def && $def['require_totp']);
+    return $def && $def['require_totp'];
 }
 
-/** Validiert Formulareingaben -> [spec|null, Fehlerliste] */
-function parse_change_request(array $in, ?array $current): array
+/** Empfänger einer ALARM-Mail: gewählte Kreise + Standortverwaltungen. Rückgabe: [Adressen, Kreisnamen, Anzahl Standortadressen] */
+function alarm_targets(array $spec, array $payload): array
+{
+    $mails = [];
+    $names = [];
+    foreach (alarm_circles() as $c) {
+        if (in_array($c['id'], (array)($spec['circles'] ?? []), true)) {
+            $names[] = $c['name'];
+            foreach ($c['emails'] as $e) {
+                $mails[$e] = $e;
+            }
+        }
+    }
+    $locMails = [];
+    if (!empty($spec['notify_locations'])) {
+        $ids = array_column($payload['locations'] ?? [], 'id');
+        foreach (locations_all() as $l) {
+            if (!$ids || in_array($l['id'], $ids, true)) {
+                foreach ($l['emails'] as $e) {
+                    $locMails[$e] = $e;
+                }
+            }
+        }
+    }
+    return [array_values(array_unique(array_merge(array_values($mails), array_values($locMails)))), $names, count($locMails)];
+}
+
+/** Validiert Formulareingaben -> [spec|null, Fehlerliste]. $target: betroffene Meldung bei extend/update/end. */
+function parse_change_request(array $in, ?array $target): array
 {
     $b = bcm();
     $mode = (string)($in['mode'] ?? 'set');
-    if (!in_array($mode, ['set', 'extend', 'end'], true)) {
+    if (!in_array($mode, ['set', 'extend', 'update', 'end'], true)) {
         return [null, ['Ungültige Aktion.']];
     }
     $note = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($in['note'] ?? '')) ?? '';
     $note = mb_substr(trim($note), 0, 200);
-    $spec = ['mode' => $mode, 'key' => '', 'loc_ids' => [], 'valid_until' => null, 'alarm_mail' => false, 'note' => $note];
+    $spec = ['mode' => $mode, 'key' => '', 'target' => null, 'loc_ids' => [], 'contact_ids' => [], 'valid_until' => null,
+        'alarm_mail' => false, 'circles' => [], 'notify_locations' => false, 'note' => $note];
     $errors = [];
 
-    if ($mode === 'end') {
-        $spec['key'] = $b['default_status'];
-        return [$spec, []];
-    }
-    if ($mode === 'extend') {
-        if (!$current || empty($current['payload'])) {
-            return [null, ['Kein aktiver Status zum Verlängern.']];
-        }
-        $spec['key'] = (string)$current['status_key'];
-        $spec['loc_ids'] = array_values(array_column($current['payload']['locations'] ?? [], 'id'));
-        $def = $b['by_key'][$spec['key']] ?? null;
-        if (!$def) {
-            return [null, ['Der aktuelle Status ist in der config.json nicht mehr definiert.']];
-        }
-    } else {
+    if ($mode === 'set') {
         $def = $b['by_key'][(string)($in['status_key'] ?? '')] ?? null;
-        if (!$def) {
+        if (!$def || $def['key'] === $b['default_status']) {
             return [null, ['Bitte einen Status auswählen.']];
         }
-        $spec['key'] = $def['key'];
+    } else {
+        if (!$target || empty($target['payload'])) {
+            return [null, ['Diese Meldung ist nicht mehr aktiv. Bitte neu laden.']];
+        }
+        $def = $b['by_key'][(string)$target['status_key']] ?? null;
+        if (!$def) {
+            return [null, ['Diese Meldung ist in der config.json nicht mehr definiert.']];
+        }
+        $spec['target'] = (int)$target['id'];
+        $spec['loc_ids'] = array_values(array_column($target['payload']['locations'] ?? [], 'id'));
+        $spec['contact_ids'] = array_values(array_filter(array_column($target['payload']['contacts'] ?? [], 'id')));
+    }
+    $spec['key'] = $def['key'];
+    if ($mode !== 'end') {
         $hits = critical_terms_in($def['label'] . "\n" . $def['text'], $b);
         if ($hits) {
             return [null, ['Der Meldungstext dieses Status enthält kritische Begriffe (' . implode(', ', $hits)
                 . ') und ist nicht pressetauglich. Bitte config.json korrigieren.']];
         }
+    }
+    if (in_array($mode, ['set', 'update'], true)) {
         if ($def['audience'] === 'ALLE_UND_ADRESSLISTE') {
             $ids = !empty($in['loc_all']) ? array_keys($b['locations_by_id']) : array_map('strval', (array)($in['loc'] ?? []));
             $ids = array_values(array_unique(array_filter($ids, fn($i) => isset($b['locations_by_id'][$i]))));
@@ -1702,15 +2298,24 @@ function parse_change_request(array $in, ?array $current): array
             }
             $spec['loc_ids'] = $ids;
         }
-        if (!empty($in['alarm_mail'])) {
-            if (!$def['alarm_mail_allowed']) {
-                $errors[] = 'Für diesen Status ist keine ALARM-Mail vorgesehen.';
-            } elseif (!alarm_recipients()) {
-                $errors[] = 'Es sind keine ALARM-Empfänger konfiguriert.';
-            } else {
-                $spec['alarm_mail'] = true;
+        $known = array_column(contacts_all(), 'id');
+        $spec['contact_ids'] = array_values(array_intersect($known, array_map('strval', (array)($in['contacts'] ?? []))));
+    }
+    if (!empty($in['alarm_mail'])) {
+        if (!$def['alarm_mail_allowed']) {
+            $errors[] = 'Für diesen Status ist keine ALARM-Mail vorgesehen.';
+        } else {
+            $spec['alarm_mail'] = true;
+            $spec['circles'] = array_values(array_intersect(array_column(alarm_circles(), 'id'), array_map('strval', (array)($in['circles'] ?? []))));
+            $spec['notify_locations'] = !empty($in['notify_loc']);
+            [$to] = alarm_targets($spec, ['locations' => array_map(fn($i) => ['id' => $i], $spec['loc_ids'])]);
+            if (!$to) {
+                $errors[] = 'ALARM-Mail: Bitte mindestens einen Alarmkreis oder die Standortverwaltungen mit hinterlegten Adressen auswählen.';
             }
         }
+    }
+    if ($mode === 'end') {
+        return [$errors ? null : $spec, $errors];
     }
 
     $vt = (string)($in['validity_type'] ?? 'duration');
@@ -1738,9 +2343,6 @@ function parse_change_request(array $in, ?array $current): array
         } else {
             $spec['valid_until'] = gmdate('Y-m-d H:i:s', $now + $min * 60);
         }
-    }
-    if ($mode === 'extend' && $spec['valid_until'] === null && !$def['allow_unlimited']) {
-        $errors[] = 'Bitte Dauer oder "Gültig bis" angeben.';
     }
     return [$errors ? null : $spec, $errors];
 }
@@ -1832,27 +2434,6 @@ function login_stats(int $days = 30, ?int $nowTs = null): array
 /* ====================================================================== */
 /* E-Mail (eigener SMTP-Client, keine Abhängigkeiten)                     */
 /* ====================================================================== */
-
-/** ALARM-Empfänger: aus config.local.inc.php (CLI) und aus dem Browser (System-Seite), ohne Doppelte. */
-function alarm_recipients(): array
-{
-    $out = [];
-    foreach (recipients_web() as $e) {
-        $out[$e] = $e;
-    }
-    foreach ((array)cfg('mail.recipients', []) as $r) {
-        try {
-            $e = strtolower(trim(cfg_secret((string)$r)));
-        } catch (Throwable $ex) {
-            error_log('Status-BCM: Empfänger nicht entschlüsselbar');
-            continue;
-        }
-        if (filter_var($e, FILTER_VALIDATE_EMAIL)) {
-            $out[$e] = $e;
-        }
-    }
-    return array_values($out);
-}
 
 /** cc_default_mail1 – darf wie die Empfänger als "enc:..." hinterlegt sein. */
 function cc_default_mail1(): string
@@ -2134,6 +2715,21 @@ function mail_record(string $kind, ?int $statusId, string $subject, string $body
     return ['total' => count($results), 'ok' => $ok, 'failed' => $fail];
 }
 
+/** Kontaktangaben als Text (Mail) */
+function contacts_text(array $contacts): string
+{
+    $out = '';
+    foreach ($contacts as $c) {
+        $parts = array_filter([
+            $c['phone'] !== '' ? 'Tel. ' . $c['phone'] : '', $c['email'] !== '' ? 'E-Mail ' . $c['email'] : '',
+            trim(($c['platform'] !== '' ? $c['platform'] . ' ' : '') . $c['url']),
+            $c['meeting'] !== '' ? 'Konferenz-ID ' . $c['meeting'] : '',
+        ]);
+        $out .= '- ' . $c['name'] . ': ' . implode(', ', $parts) . "\n";
+    }
+    return $out !== '' ? "Kontakt:\n" . $out : '';
+}
+
 function mail_vars_status(array $payload, ?string $validUntil): array
 {
     $loc = '';
@@ -2146,20 +2742,29 @@ function mail_vars_status(array $payload, ?string $validUntil): array
     return [
         'prefix' => !empty($payload['exercise']) ? 'ÜBUNG – ' : '',
         'label' => $payload['label'], 'text' => $payload['text'], 'locations' => $loc,
-        'phone' => $payload['default_phone'],
+        'phone' => $payload['default_phone'], 'contacts' => contacts_text((array)($payload['contacts'] ?? [])),
         'validity' => $validUntil ? 'Voraussichtlich gültig bis: ' . fmt_local($validUntil) . ' Uhr' : '',
         'url' => rtrim((string)cfg('app.base_url'), '/') . '/',
     ];
 }
 
-/** ALARM-Mail: alle Empfänger per BCC (+ Autor und cc_default_mail1 als Kopie). */
-function send_alarm_mail(int $statusId, array $payload, ?string $validUntil, string $author): array
+/**
+ * ALARM-Mail zu einer Meldung: $kind = new | update | end (Betreff-Präfix aus System). Empfänger: gewählte Alarmkreise
+ * und Standortverwaltungen, ausschließlich per BCC, dazu Autor und cc_default_mail1.
+ */
+function send_alarm_mail(string $kind, int $statusId, array $payload, ?string $validUntil, string $author, array $spec): array
 {
-    $tpl = bcm()['mail_templates']['alarm'];
+    $tpls = bcm()['mail_templates'];
+    $tpl = $kind === 'end' ? $tpls['alarm_end'] : $tpls['alarm'];
     $vars = mail_vars_status($payload, $validUntil);
-    $subject = trim(render_tpl($tpl['subject'], $vars));
+    $prefix = trim(mail_prefixes()[$kind] ?? '');
+    $subject = trim($prefix . ' ' . trim(render_tpl($tpl['subject'], $vars)));
     $body = render_tpl($tpl['body'], $vars);
-    $bcc = alarm_recipients();
+    $tplBody = is_array($tpl['body']) ? implode("\n", $tpl['body']) : (string)$tpl['body'];
+    if ($kind !== 'end' && $vars['contacts'] !== '' && !str_contains($tplBody, '{contacts}')) {
+        $body .= "\n" . $vars['contacts'];
+    }
+    [$bcc, $circles, $locCount] = alarm_targets($spec, $payload);
     $u = users()[$author] ?? null;
     if ($u && filter_var($u['email'], FILTER_VALIDATE_EMAIL)) {
         $bcc[] = $u['email'];
@@ -2170,14 +2775,16 @@ function send_alarm_mail(int $statusId, array $payload, ?string $validUntil, str
     }
     $bcc = array_values(array_unique(array_map('strtolower', $bcc)));
     $sum = ['total' => 0, 'ok' => 0, 'failed' => 0];
+    $logKind = ['new' => 'alarm', 'update' => 'alarm_upd', 'end' => 'alarm_end'][$kind] ?? 'alarm';
     foreach (array_chunk($bcc, max(1, (int)cfg('mail.max_bcc_per_message', 50))) as $chunk) {
         $res = mail_deliver(['bcc' => $chunk, 'subject' => $subject, 'body' => $body, 'priority' => true]);
-        $r = mail_record('alarm', $statusId, $subject, $body, $res);
+        $r = mail_record($logKind, $statusId, $subject, $body, $res);
         foreach ($sum as $k => $_) {
             $sum[$k] += $r[$k];
         }
     }
-    audit('mail.alarm', 'status:' . $statusId, ['recipients' => $sum['total'], 'ok' => $sum['ok'], 'failed' => $sum['failed']], $author, 2);
+    audit('mail.alarm', 'status:' . $statusId, ['kind' => $kind, 'circles' => $circles, 'location_recipients' => $locCount,
+        'recipients' => $sum['total'], 'ok' => $sum['ok'], 'failed' => $sum['failed']], $author, setting_level($author));
     return $sum;
 }
 
@@ -2197,19 +2804,17 @@ function run_cron(?int $nowTs = null): array
     $base = rtrim((string)cfg('app.base_url'), '/');
     $cc1 = cc_default_mail1();
 
-    $rows = db()->query('SELECT * FROM ' . t('status') . " WHERE state = 'active' AND valid_until IS NOT NULL")->fetchAll();
-    foreach ($rows as $row) {
-        $r = status_decode($row);
-        if (!$r['payload']) {
-            $log[] = 'Status #' . $r['id'] . ': Nutzdaten nicht lesbar – übersprungen';
-            continue;
-        }
+    $board = status_board($now);
+    foreach ($board['unverified'] as $r) {
+        $log[] = 'Meldung #' . $r['id'] . ': nicht verifiziert – übersprungen';
+    }
+    $open = array_filter(array_merge($board['live'], $board['recent'], $board['stale']), fn($r) => ($r['gone'] ?? '') !== 'ended' && !empty($r['valid_until']));
+    foreach ($open as $r) {
         $vu = utc_ts((string)$r['valid_until']);
         $label = $r['payload']['label'];
 
         if ($auto > 0 && $now >= $vu + $auto) {
-            $res = status_create(['mode' => 'auto_end', 'key' => $b['default_status'], 'loc_ids' => [], 'valid_until' => null,
-                'alarm_mail' => false, 'note' => 'automatische Rücksetzung nach Ablauf ohne Bestätigung'], 'system:cron', ['cron' => true]);
+            $res = status_end((int)$r['id'], 'system:cron', ['cron' => true], 'automatisch beendet nach Ablauf ohne Bestätigung', true);
             $to = [];
             $a = users()[$r['author']] ?? null;
             if ($a && filter_var($a['email'], FILTER_VALIDATE_EMAIL)) {
@@ -2222,7 +2827,7 @@ function run_cron(?int $nowTs = null): array
             $res2 = mail_deliver(['to' => $to, 'cc' => $cc1 !== '' ? [$cc1] : [], 'subject' => $subject, 'body' => $body]);
             $sum = mail_record('autorevert', (int)$res['id'], $subject, $body, $res2);
             audit('mail.autorevert', 'status:' . $res['id'], ['recipients' => $sum['total'], 'ok' => $sum['ok'], 'failed' => $sum['failed']], 'system:cron', 0);
-            $log[] = "Status #{$r['id']} ($label) automatisch zurückgesetzt";
+            $log[] = "Meldung #{$r['id']} ($label) automatisch beendet";
             continue;
         }
 
@@ -2379,7 +2984,7 @@ function system_check(): array
             $chk(false, "Benutzer $id: Authenticator-App noch nicht gekoppelt (passiert beim ersten Login)");
         }
     }
-    foreach ($dbOk && $keyOk ? ['stage1', 'recipients', 'cc1'] : [] as $k) {
+    foreach ($dbOk && $keyOk ? ['stage1', 'recipients', 'cc1', 'circles', 'locations', 'contacts', 'mail_prefix'] : [] as $k) {
         if (setting_broken($k)) {
             $chk(false, "Einstellung $k nicht lesbar – Datenbank verändert oder falscher Master-Key");
         }
@@ -2388,7 +2993,16 @@ function system_check(): array
     $chk(!str_contains($base, 'example.invalid'), 'Adresse der Seite (app.base_url) gesetzt');
     $chk(str_starts_with($base, 'https://'), 'Adresse der Seite nutzt HTTPS');
     $n = $keyOk ? count(alarm_recipients()) : 0;
-    $chk($n > 0, 'ALARM-Empfänger vorhanden (' . $n . ')');
+    $chk($n > 0, 'ALARM-Empfänger vorhanden (' . $n . ' in ' . ($keyOk ? count(alarm_circles()) : 0) . ' Alarmkreis(en))');
+    if ($keyOk) {
+        foreach (alarm_circles() as $c) {
+            if (!$c['emails']) {
+                $chk(false, 'Alarmkreis "' . $c['name'] . '" hat keine Adressen');
+            }
+        }
+        $noMail = array_column(array_filter(locations_all(), fn($l) => !$l['emails']), 'name');
+        $chk(!$noMail, 'E-Mail der Standortverwaltung hinterlegt' . ($noMail ? ' (fehlt bei: ' . implode(', ', $noMail) . ')' : ''));
+    }
     $cc1 = $keyOk ? cc_default_mail1() : '';
     $chk($cc1 !== '' && !str_contains($cc1, 'example.invalid'), 'Kopie-Adresse (cc_default_mail1) gesetzt');
     $chk((string)cfg('mail.transport') === 'smtp', 'Mailversand per SMTP (nicht nur Testmodus "log")');
@@ -2530,7 +3144,40 @@ function severity_badge(string $sev): string
     return '<span class="badge text-bg-' . $c . ' text-uppercase">' . h(severity_label($sev)) . '</span>';
 }
 
-/** Statuskarte. $detail = true: zusätzlich Autor, ALARM-Mail, Notiz (nur Stufe 2). */
+/** Kontaktangaben einer Meldung (Telefon, E-Mail, Videokonferenz) */
+function render_contacts(array $contacts): void
+{
+    if (!$contacts) {
+        return;
+    }
+    echo '<h3 class="h6 text-body-secondary mb-2">Kontakt</h3><ul class="list-group mb-3">';
+    foreach ($contacts as $c) {
+        echo '<li class="list-group-item"><div class="fw-semibold">' . h($c['name']) . '</div><div class="d-flex flex-wrap gap-3">';
+        if ($c['phone'] !== '') {
+            echo '<a class="tel" href="' . h(tel_href($c['phone'])) . '">' . h($c['phone']) . '</a>';
+        }
+        if ($c['email'] !== '') {
+            echo '<a href="mailto:' . h($c['email']) . '">' . h($c['email']) . '</a>';
+        }
+        if ($c['url'] !== '') {
+            $host = (string)parse_url($c['url'], PHP_URL_HOST);
+            echo '<a href="' . h($c['url']) . '" rel="noopener noreferrer">' . h($c['platform'] !== '' ? $c['platform'] : 'Videokonferenz')
+                . '</a> <span class="small text-body-secondary">(' . h($host) . ')</span>';
+        } elseif ($c['platform'] !== '') {
+            echo '<span>' . h($c['platform']) . '</span>';
+        }
+        if ($c['meeting'] !== '') {
+            echo '<span>Konferenz-ID: <span class="font-monospace">' . h($c['meeting']) . '</span></span>';
+        }
+        echo '</div></li>';
+    }
+    echo '</ul>';
+}
+
+/**
+ * Meldungskarte. $detail = true: zusätzlich Autor, ALARM-Mail, Notiz (nur Stufe 2). Ist $row['gone'] gesetzt
+ * (expired | ended), wird die Karte ausgegraut mit "nicht mehr gültig" bzw. "zurückgenommen/gelöst" angezeigt.
+ */
 function render_status_card(?array $row, bool $detail = false): void
 {
     $b = bcm();
@@ -2541,8 +3188,16 @@ function render_status_card(?array $row, bool $detail = false): void
     }
     $p = $row['payload'];
     $sev = $p['severity'];
-    echo '<section class="card shadow-sm mb-3 status-card sev-' . h($sev) . '"><div class="card-body">';
-    echo '<div class="d-flex flex-wrap gap-1 mb-2">' . severity_badge($sev);
+    $gone = (string)($row['gone'] ?? '');
+    echo '<section class="card shadow-sm mb-3 status-card sev-' . h($sev) . ($gone !== '' ? ' status-gone' : '') . '"><div class="card-body">';
+    echo '<div class="d-flex flex-wrap gap-1 mb-2">';
+    if ($gone === 'expired') {
+        echo '<span class="badge text-bg-secondary text-uppercase">Nicht mehr gültig</span>';
+    } elseif ($gone === 'ended') {
+        echo '<span class="badge text-bg-secondary text-uppercase">Zurückgenommen / gelöst</span>';
+    } else {
+        echo severity_badge($sev);
+    }
     if (!empty($p['exercise'])) {
         echo '<span class="badge text-bg-dark text-uppercase">Übung</span>';
     }
@@ -2559,14 +3214,17 @@ function render_status_card(?array $row, bool $detail = false): void
     } elseif ($sev !== 'ok') {
         echo '<p>Rückfragen: <a class="tel" href="' . h(tel_href($p['default_phone'])) . '">' . h($p['default_phone']) . '</a></p>';
     }
-    echo '<p class="small text-body-secondary mb-0">Stand: ' . h(fmt_local($row['created_at'])) . ' Uhr';
-    if (!empty($row['valid_until'])) {
-        echo '<br>Gültig bis: ' . h(fmt_local($row['valid_until'])) . ' Uhr';
+    if ($gone === '') {
+        render_contacts((array)($p['contacts'] ?? []));
+    }
+    echo '<p class="small text-body-secondary mb-0">';
+    echo $row['created_at'] ? 'Stand: ' . h(fmt_local($row['created_at'])) . ' Uhr' : 'Stand: ' . h(fmt_local(now_utc())) . ' Uhr';
+    if ($gone === 'ended') {
+        echo '<br>Beendet: ' . h(fmt_local((string)$row['gone_at'])) . ' Uhr';
+    } elseif (!empty($row['valid_until'])) {
+        echo '<br>' . ($gone === 'expired' ? 'Abgelaufen: ' : 'Gültig bis: ') . h(fmt_local($row['valid_until'])) . ' Uhr';
     }
     echo '</p>';
-    if (!empty($row['valid_until']) && utc_ts((string)$row['valid_until']) < time()) {
-        echo '<div class="alert alert-warning mt-3 mb-0">Die angegebene Gültigkeit ist überschritten. Die Aktualität wird derzeit geprüft.</div>';
-    }
     if (empty($row['mac_ok'])) {
         echo '<div class="alert alert-warning mt-3 mb-0">Diese Meldung konnte nicht verifiziert werden. Bitte nutzen Sie bei Fragen die Rufnummer '
             . h($p['default_phone']) . '.</div>';
@@ -2580,4 +3238,26 @@ function render_status_card(?array $row, bool $detail = false): void
         echo '</p>';
     }
     echo '</div></section>';
+}
+
+/** Alle Meldungen: gültige (oder "Regelbetrieb"), darunter ausgegraut die abgelaufenen/beendeten der letzten Stunden. */
+function render_board(array $board, bool $detail = false): void
+{
+    foreach ($board['unverified'] as $r) {
+        if ($r['payload']) {
+            render_status_card($r, $detail);
+        }
+    }
+    if (!$board['live']) {
+        render_status_card(null, false);
+    }
+    foreach ($board['live'] as $r) {
+        render_status_card($r, $detail);
+    }
+    if ($board['recent']) {
+        echo '<h2 class="h6 text-body-secondary mt-4 mb-2">Nicht mehr gültig (letzte ' . (int)cfg('display.keep_hours', 48) . ' Stunden)</h2>';
+        foreach ($board['recent'] as $r) {
+            render_status_card($r, $detail);
+        }
+    }
 }

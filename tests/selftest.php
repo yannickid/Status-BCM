@@ -99,9 +99,9 @@ ok(!totp_verify_user($u, '000000', $now), 'TOTP falscher Code abgelehnt');
 ok(totp_verify_user($u, totp_at(b32_decode($totpSecret), intdiv($now, 30) + 1), $now), 'TOTP ±1 Schritt Toleranz');
 ok(!totp_verify_user($u, totp_at(b32_decode($totpSecret), intdiv($now, 30) + 5), $now), 'TOTP außerhalb des Fensters abgelehnt');
 
-/* --- Status + Audit --- */
+/* --- Meldungen + Audit --- */
 $_SERVER['REMOTE_ADDR'] = '203.0.113.9';
-ok(status_current() === null, 'Zu Beginn kein Status');
+ok(status_current() === null && status_board()['live'] === [], 'Zu Beginn keine Meldung');
 [$spec, $errs] = parse_change_request(['mode' => 'set', 'status_key' => 'SICHERHEITSMASSNAHME', 'validity_type' => 'duration', 'duration' => '240'], null);
 ok($spec === null && $errs !== [], 'Standortliste ist Pflicht bei ALLE_UND_ADRESSLISTE');
 [$spec, $errs] = parse_change_request(['mode' => 'set', 'status_key' => 'SICHERHEITSMASSNAHME', 'loc' => ['muc-sued', 'nue-mitte', 'evil'],
@@ -109,7 +109,7 @@ ok($spec === null && $errs !== [], 'Standortliste ist Pflicht bei ALLE_UND_ADRES
 ok($spec !== null && $spec['loc_ids'] === ['muc-sued', 'nue-mitte'], 'Unbekannte Standorte werden verworfen');
 ok(spec_needs_totp($spec), 'TOTP bei kritischem Status erforderlich');
 [$s2, ] = parse_change_request(['mode' => 'set', 'status_key' => 'NORMAL', 'validity_type' => 'unlimited'], null);
-ok($s2 !== null && !spec_needs_totp($s2), 'Regelbetrieb ohne TOTP');
+ok($s2 === null, 'Regelbetrieb ist keine eigene Meldung (wird angezeigt, wenn nichts gilt)');
 [$s3, $e3] = parse_change_request(['mode' => 'set', 'status_key' => 'HINWEIS', 'validity_type' => 'unlimited'], null);
 ok($s3 === null, 'Unbefristet nicht erlaubt bei Hinweis');
 [$s4, ] = parse_change_request(['mode' => 'set', 'status_key' => 'HINWEIS', 'validity_type' => 'duration', 'duration' => '999'], null);
@@ -119,23 +119,51 @@ ok($s5 === null, 'ALARM-Mail ohne Empfänger wird abgelehnt: ' . implode(' ', $e
 
 $res = status_create($spec, 'anna', ['totp' => true]);
 $cur = status_current();
-ok($cur && $cur['mac_ok'] && $cur['payload']['label'] === 'Sicherheitsmaßnahme', 'Status gesetzt, lesbar, MAC ok');
+ok($cur && $cur['mac_ok'] && $cur['payload']['label'] === 'Sicherheitsmaßnahme' && $res['msg'] === 1, 'Meldung gesetzt, lesbar, MAC ok');
 ok($cur['payload']['locations'][1]['phone'] === $j['default_phone'] && $cur['payload']['locations'][1]['default_phone'], 'Default-Rufnummer, wenn keine hinterlegt');
 ok($cur['payload']['locations'][0]['phone'] === '+49 89 12345-110', 'Eigene Standort-Rufnummer');
 $raw = db()->query('SELECT payload_enc FROM ' . t('status'))->fetchColumn();
 ok(!str_contains((string)$raw, 'Standort') && !str_contains((string)$raw, 'Sicherheits'), 'Nutzdaten (Text/Standorte) liegen verschlüsselt in der DB');
 
-[$ext, ] = parse_change_request(['mode' => 'extend', 'validity_type' => 'duration', 'duration' => '60'], $cur);
-status_create($ext, 'anna');
-ok(count(status_history()) === 2 && status_current()['payload']['locations'][0]['id'] === 'muc-sued', 'Verlängerung: neue Zeile, Standorte übernommen, Historie vollständig');
-[$end, ] = parse_change_request(['mode' => 'end'], status_current());
-status_create($end, 'anna');
-ok(status_current()['status_key'] === 'NORMAL', 'Beenden setzt Regelbetrieb');
+// Zweite, gleichzeitige Meldung an einem anderen Standort
+[$specB, ] = parse_change_request(['mode' => 'set', 'status_key' => 'NETZ_EINGESCHRAENKT', 'loc' => ['ham-hafen'],
+    'validity_type' => 'duration', 'duration' => '120'], null);
+$resB = status_create($specB, 'anna');
+$bd = status_board();
+ok(count($bd['live']) === 2 && $bd['live'][0]['status_key'] === 'SICHERHEITSMASSNAHME' && $bd['live'][1]['status_key'] === 'NETZ_EINGESCHRAENKT',
+    'Zwei Meldungen gleichzeitig, kritische zuerst');
+
+[$ext, ] = parse_change_request(['mode' => 'extend', 'validity_type' => 'duration', 'duration' => '60'], status_target($res['id']));
+$resA2 = status_create($ext, 'anna');
+$bd = status_board();
+ok(count(status_history()) === 3 && count($bd['live']) === 2 && $resA2['msg'] === $res['id']
+    && $bd['live'][0]['id'] == $resA2['id'] && $bd['live'][0]['payload']['locations'][0]['id'] === 'muc-sued',
+    'Verlängerung: neue Version derselben Meldung, Standorte übernommen, andere Meldung unberührt');
+ok(status_target($res['id']) === null && throws(fn() => status_create($ext, 'anna')), 'Abgelöste Version kann nicht erneut geändert werden');
+[$upd, $ue] = parse_change_request(['mode' => 'update', 'loc' => ['ber-nord'], 'validity_type' => 'duration', 'duration' => '240'], status_target($resB['id']));
+$resB2 = status_create($upd, 'anna');
+$b2 = array_values(array_filter(status_board()['live'], fn($r) => $r['msg'] === $resB['id']));
+ok(count($b2) === 1 && $b2[0]['payload']['locations'][0]['id'] === 'ber-nord', 'Ändern: Standorte einer Meldung angepasst');
+[$end, $ee] = parse_change_request(['mode' => 'end'], status_target($resB2['id']));
+ok($end !== null && !spec_needs_totp($end), 'Beenden ohne ALARM-Mail braucht keinen TOTP-Code');
+status_end($resB2['id'], 'anna', [], 'gelöst');
+$bd = status_board();
+ok(count($bd['live']) === 1 && count($bd['recent']) === 1 && $bd['recent'][0]['gone'] === 'ended' && $bd['recent'][0]['mac_ok'],
+    'Beendet: bleibt ausgegraut als "zurückgenommen / gelöst" sichtbar');
+$later = status_board(time() + 2 * 3600);
+ok(count($later['live']) === 0 && count(array_filter($later['recent'], fn($r) => $r['gone'] === 'expired')) === 1, 'Abgelaufen: ausgegraut als "nicht mehr gültig"');
+$much = status_board(time() + 49 * 3600);
+ok($much['recent'] === [] && count($much['stale']) === 1, 'Nach 48 Stunden nicht mehr angezeigt');
+ob_start();
+render_board($bd, false);
+$html = (string)ob_get_clean();
+ok(str_contains($html, 'Zurückgenommen / gelöst') && str_contains($html, 'status-gone'), 'Anzeige: beendete Meldung ausgegraut mit Vermerk');
 
 $v = audit_verify();
-ok($v['ok'] && $v['count'] === 3, 'Audit-Kette intakt (' . $v['count'] . ' Einträge)');
+ok($v['ok'] && $v['count'] === 5, 'Audit-Kette intakt (' . $v['count'] . ' Einträge)');
 $rec = audit_recent(1)[0];
-ok($rec['actor'] === 'anna' && $rec['details']['mode'] === 'end' && $rec['details']['how'] === [] && isset($rec['details']['_ctx']['sapi']), 'Audit: wer/was/wann/wie entschlüsselbar');
+ok($rec['actor'] === 'anna' && $rec['action'] === 'status.end' && $rec['details']['msg'] === $resB['id'] && $rec['details']['note'] === 'gelöst'
+    && isset($rec['details']['_ctx']['sapi']), 'Audit: wer/was/wann/wie entschlüsselbar');
 $rawAudit = db()->query('SELECT details_enc FROM ' . t('audit') . ' ORDER BY seq LIMIT 1')->fetchColumn();
 ok(!str_contains((string)$rawAudit, 'status.') && !str_contains((string)$rawAudit, 'before'), 'Audit-Details (Klartext-Felder) nicht in der DB lesbar');
 ok(throws(fn() => db()->exec('UPDATE ' . t('audit') . " SET actor = 'x' WHERE seq = 1")), 'DB-Trigger blockiert UPDATE auf Audit');
@@ -151,18 +179,77 @@ ok(audit_verify()['ok'], 'Nach Rückgängigmachen wieder intakt');
 
 db()->exec('UPDATE ' . t('status') . " SET severity = 'ok' WHERE id = 1");
 ok(!status_decode(db()->query('SELECT * FROM ' . t('status') . ' WHERE id = 1')->fetch())['mac_ok'], 'Manipulierte Status-Zeile wird per MAC erkannt');
+db()->exec('UPDATE ' . t('status') . " SET severity = 'critical' WHERE id = 1");
+db()->exec('UPDATE ' . t('status') . " SET msg_id = NULL WHERE id = " . $resA2['id']);
+ok(!status_board()['live'][0]['mac_ok'] || status_board()['unverified'] !== [], 'Umgehängte Meldungsnummer wird per MAC erkannt');
+db()->exec('UPDATE ' . t('status') . ' SET msg_id = ' . $res['id'] . ' WHERE id = ' . $resA2['id']);
 
-db()->exec('UPDATE ' . t('status') . " SET state = 'superseded' WHERE id = 3");
-db()->exec('UPDATE ' . t('status') . " SET state = 'active' WHERE id = 2");
-ok(status_current()['id'] == 2 && !status_current()['mac_ok'], 'Reaktivierte alte Status-Zeile wird erkannt (Abgleich mit Audit)');
-db()->exec('UPDATE ' . t('status') . " SET state = 'superseded' WHERE id = 2");
-db()->exec('UPDATE ' . t('status') . " SET state = 'active' WHERE id = 3");
-ok(status_current()['mac_ok'], 'Aktueller Status wieder konsistent');
+db()->exec('UPDATE ' . t('status') . " SET state = 'active' WHERE id = 1");
+$bd = status_board();
+ok(count($bd['unverified']) === 1 && $bd['unverified'][0]['id'] == 1 && count($bd['live']) === 1 && $bd['live'][0]['mac_ok'],
+    'Reaktivierte alte Version wird erkannt (Abgleich mit Audit)');
+db()->exec('UPDATE ' . t('status') . " SET state = 'superseded' WHERE id = 1");
+db()->exec('UPDATE ' . t('status') . " SET state = 'active' WHERE id = " . $resB2['id']);
+ok(count(status_board()['unverified']) === 1, 'Wieder aktivierte beendete Meldung wird erkannt');
+db()->exec('UPDATE ' . t('status') . " SET state = 'ended' WHERE id = " . $resB2['id']);
+$bd = status_board();
+ok($bd['unverified'] === [] && $bd['live'][0]['mac_ok'] && $bd['recent'][0]['mac_ok'], 'Meldungen wieder konsistent');
 ok(throws(fn() => db()->exec('DELETE FROM ' . t('status'))), 'DB-Trigger blockiert DELETE in der Status-Historie');
 
+/* --- Umstieg von Version 1.2 (eine Meldung, keine Spalte msg_id) --- */
+$cfgOld = require $local;
+$cfgOld['db']['prefix'] = 'su' . bin2hex(random_bytes(3)) . '_';
+$localOld = $tmp . '/config.old.inc.php';
+file_put_contents($localOld, "<?php\nreturn " . var_export($cfgOld, true) . ";\n");
+$codeOld = <<<'PHP'
+define('SBCM', true); require $argv[1] . '/lib.inc.php';
+$_SERVER['REMOTE_ADDR'] = '203.0.113.9';
+$mk = function (string $key, array $locs) {
+    $r = status_create(['mode' => 'set', 'key' => $key, 'loc_ids' => $locs, 'valid_until' => gmdate('Y-m-d H:i:s', time() + 3600)], 'anna');
+    return $r['id'];
+};
+// Zustand wie in 1.2: jede Meldung löste die vorige ab, "Ende" setzte Regelbetrieb
+$a = $mk('SICHERHEITSMASSNAHME', ['muc-sued']);
+db()->exec('UPDATE ' . t('status') . " SET state = 'superseded' WHERE id = $a");
+$b = $mk('HINWEIS', []);
+$o = [];
+db()->exec('ALTER TABLE ' . t('status') . ' DROP COLUMN msg_id');
+db()->prepare('DELETE FROM ' . t('kv') . ' WHERE k = ?')->execute(['multi_since_seq']);
+schema_upgrade(db());
+$bd = status_board();
+$o['hint'] = count($bd['live']) === 1 && $bd['live'][0]['id'] == $b && $bd['unverified'] === [];
+$o['since'] = (int)kv_get('multi_since_seq') === 2;
+// zweiter Fall: zuletzt Regelbetrieb gesetzt
+db()->exec('UPDATE ' . t('status') . " SET state = 'superseded' WHERE id = $b");
+status_create(['mode' => 'set', 'key' => 'NORMAL', 'loc_ids' => [], 'valid_until' => null], 'anna');
+db()->exec('ALTER TABLE ' . t('status') . ' DROP COLUMN msg_id');
+db()->prepare('DELETE FROM ' . t('kv') . ' WHERE k = ?')->execute(['multi_since_seq']);
+schema_upgrade(db());
+$bd = status_board();
+$o['normal'] = $bd['live'] === [] && $bd['unverified'] === [];
+$mk('NETZ_EINGESCHRAENKT', ['ham-hafen']);
+$mk('HINWEIS', []);
+$o['multi'] = count(status_board()['live']) === 2;
+if (db_driver() === 'mysql') {
+    foreach (['audit_no_upd', 'audit_no_del', 'status_no_del', 'account_no_del'] as $tr) {
+        try { db()->exec('DROP TRIGGER ' . t($tr)); } catch (Throwable $e) { }
+    }
+    foreach (['status', 'audit', 'mail_log', 'login_attempt', 'totp_used', 'kv', 'view_count', 'account'] as $tb) {
+        db()->exec('DROP TABLE IF EXISTS ' . t($tb));
+    }
+}
+echo json_encode($o);
+PHP;
+$o = json_decode((string)shell_exec('SBCM_LOCAL_CONFIG=' . escapeshellarg($localOld) . ' ' . escapeshellarg(PHP_BINARY) . ' -r '
+    . escapeshellarg($codeOld) . ' ' . escapeshellarg(dirname(__DIR__)) . ' 2>&1'), true);
+ok(($o['since'] ?? false) && ($o['hint'] ?? false), 'Umstieg 1.2: Spalte nachgerüstet, bisherige Meldung bleibt die einzige gültige');
+ok($o['normal'] ?? false, 'Umstieg 1.2: früherer Regelbetrieb erscheint nicht als Meldung');
+ok($o['multi'] ?? false, 'Nach dem Umstieg gelten mehrere Meldungen gleichzeitig');
+
 /* --- Cron: Erinnerung / Wiederholung / Limit --- */
+status_end($resA2['id'], 'anna');
 $spec['valid_until'] = gmdate('Y-m-d H:i:s', time() - 600);
-status_create($spec, 'anna');
+$resC = status_create($spec, 'anna');
 $log = run_cron();
 ok(count(array_filter($log, fn($l) => str_contains($l, 'Erinnerung'))) === 1, 'Cron sendet Erinnerung nach Ablauf');
 $eml = glob(storage_dir() . '/outbox/*.eml');
@@ -183,41 +270,99 @@ ok(db()->query('SELECT content_enc FROM ' . t('mail_log') . " WHERE kind = 'remi
 $mc = (string)db()->query('SELECT content_enc FROM ' . t('mail_log') . ' LIMIT 1')->fetchColumn();
 ok(!str_contains($mc, 'Statusmeldung'), 'Mail-Inhalte liegen verschlüsselt in der DB');
 
-/* --- Alarm-Mail: BCC, Empfänger geschützt --- */
-$rl = file_get_contents($local);
+/* --- Alarmkreise, Standort-Adressen, Kontakte, Präfixe --- */
 $cfgArr = require $local;
-$cfgArr['mail']['recipients'] = [cfg_encrypt('geheim1@ziel.example'), 'geheim2@ziel.example'];
 $cfgArr['mail']['cc_default_mail1'] = cfg_encrypt('cc1@test.example');
 file_put_contents($local, "<?php\nreturn " . var_export($cfgArr, true) . ";\n");
+ok(circle_update('allgemein', "geheim1@ziel.example\ngeheim2@ziel.example", [], 'system:test') === null, 'Bisheriger Kreis "Allgemein" übernommen');
+ok(circle_create('IT', "it1@ziel.example\nit2@ziel.example; it1@ziel.example", 'system:test') === null, 'Alarmkreis IT angelegt');
+ok(circle_create('it', 'x@ziel.example', 'system:test') !== null && circle_create('Leitung', 'kaputt', 'system:test') !== null, 'Doppelter Name und ungültige Adresse abgelehnt');
+ok(circle_create('BOA/Krisenstab', 'boa@ziel.example', 'system:test') === null, 'Alarmkreis BOA/Krisenstab angelegt');
+$circ = array_column(alarm_circles(), null, 'id');
+ok(array_keys($circ) === ['allgemein', 'it', 'boa-krisenstab'] && $circ['it']['emails'] === ['it1@ziel.example', 'it2@ziel.example'],
+    'Kreise mit eindeutiger Kennung, Doppelte entfernt');
+ok(circle_update('it', 'it3@ziel.example', [0], 'system:test') === null && array_column(alarm_circles(), null, 'id')['it']['emails'] === ['it2@ziel.example', 'it3@ziel.example'],
+    'Kreis: Adresse ergänzt und entfernt');
+ok(circle_update('it', 'it3@ziel.example', [], 'system:test') !== null, 'Kreis: keine Änderung wird gemeldet');
+ok(circle_create('Leitung', 'chef@ziel.example', 'system:test') === null && circle_delete('leitung', 'system:test') === null
+    && count(alarm_circles()) === 3, 'Kreis gelöscht');
+$rawC = (string)kv_get('set:circles');
+ok($rawC !== '' && !str_contains($rawC, 'ziel') && !str_contains($rawC, 'Krisenstab'), 'Alarmkreise verschlüsselt gespeichert');
+
+ok(location_save('ham-hafen', 'Hamburg Hafen', '+49 40 1234-0', 'verwaltung.ham@ziel.example', [], 'system:test') === null
+    && location_emails('ham-hafen') === ['verwaltung.ham@ziel.example'], 'Standort: E-Mail der Standortverwaltung hinterlegt');
+ok(!isset(bcm()['locations_by_id']['ham-hafen']['emails']) && bcm()['locations_by_id']['ham-hafen']['phone'] === '+49 40 1234-0',
+    'Standort-Adressen sind nicht Teil der Anzeigedaten');
+ok(location_save('', 'Köln Süd', '', 'koeln@ziel.example', [], 'system:test') === null && isset(bcm()['locations_by_id']['koeln-sued']), 'Standort angelegt');
+ok(location_save('', 'Standort mit Hackerangriff', '', '', [], 'system:test') !== null, 'Standortname mit kritischem Begriff abgelehnt');
+ok(location_delete('koeln-sued', 'system:test') === null && !isset(bcm()['locations_by_id']['koeln-sued']), 'Standort gelöscht');
+ok(!str_contains((string)kv_get('set:locations'), 'verwaltung'), 'Standort-Adressen verschlüsselt gespeichert');
+
+ok(contact_save('', ['name' => 'Krisenstab-Konferenz', 'platform' => 'Teams', 'url' => 'https://teams.example/meet/1', 'meeting' => '123 456#'], 'system:test') === null,
+    'Kontakt (Videokonferenz) angelegt');
+ok(contact_save('', ['name' => 'Leer'], 'system:test') !== null && contact_save('', ['name' => 'X', 'url' => 'http://unsicher.example'], 'system:test') !== null
+    && contact_save('', ['name' => 'X', 'url' => 'javascript:alert(1)'], 'system:test') !== null, 'Kontakt ohne Angabe oder ohne https abgelehnt');
+ok(contact_save('', ['name' => 'Notfallnummer IT', 'phone' => '+49 30 999-0'], 'system:test') === null && count(contacts_all()) === 2, 'Notfallnummer angelegt');
+ok(mail_prefixes() === SBCM_PREFIX_DEFAULTS && mail_prefixes_set(['new' => 'Ausfall!', 'update' => '', 'end' => ''], 'system:test') !== null,
+    'Präfixe: Standardwerte, kritische Begriffe abgelehnt');
+ok(mail_prefixes_set(['new' => '[NOTFALL]', 'update' => '[Update]', 'end' => '[Entwarnung]'], 'system:test') === null && mail_prefixes()['new'] === '[NOTFALL]',
+    'Präfixe gespeichert');
+
+[$sp, $se] = parse_change_request(['mode' => 'set', 'status_key' => 'NETZ_EINGESCHRAENKT', 'loc' => ['ham-hafen'], 'contacts' => ['krisenstab-konferenz', 'gibts-nicht'],
+    'validity_type' => 'duration', 'duration' => '60', 'alarm_mail' => '1', 'circles' => ['it', 'evil'], 'notify_loc' => '1'], null);
+ok($sp !== null && $sp['circles'] === ['it'] && $sp['contact_ids'] === ['krisenstab-konferenz'], 'Meldung mit Kreis und Kontakt: Unbekanntes verworfen');
+[$to, $names, $lc] = alarm_targets($sp, ['locations' => [['id' => 'ham-hafen']]]);
+ok(count($to) === 3 && $names === ['IT'] && $lc === 1, 'Empfänger: gewählter Kreis + Standortverwaltung des betroffenen Standorts');
+[$to2] = alarm_targets(['circles' => [], 'notify_locations' => true], ['locations' => []]);
+ok($to2 === ['verwaltung.ham@ziel.example'], 'Meldung ohne Standortliste: alle Standortverwaltungen');
+$resM = status_create($sp, 'anna', ['totp' => true]);
+ok(($resM['payload']['contacts'][0]['url'] ?? '') === 'https://teams.example/meet/1', 'Kontakt wird mit der Meldung gespeichert');
+
+/* --- Alarm-Mail: BCC, Empfänger geschützt --- */
 // cfg() ist gecacht -> frischer Prozess für den Alarm-Test
 $php = escapeshellarg(PHP_BINARY);
 $code = <<<'PHP'
 define('SBCM', true); require $argv[1] . '/lib.inc.php';
 $_SERVER['REMOTE_ADDR'] = '203.0.113.9';
-$c = status_current(); $p = $c['payload'];
-$r = send_alarm_mail((int)$c['id'], $p, $c['valid_until'], 'anna');
-echo json_encode($r);
+$id = (int)$argv[2];
+$c = null;
+foreach (status_board()['live'] as $r) { if ((int)$r['id'] === $id) { $c = $r; } }
+$spec = ['circles' => ['allgemein', 'it'], 'notify_locations' => true];
+$r = send_alarm_mail('new', $id, $c['payload'], $c['valid_until'], 'anna', $spec);
+$r2 = send_alarm_mail('end', $id, $c['payload'], null, 'anna', ['circles' => ['boa-krisenstab'], 'notify_locations' => false]);
+echo json_encode([$r, $r2]);
 PHP;
-$o = shell_exec('SBCM_LOCAL_CONFIG=' . escapeshellarg($local) . " $php -r " . escapeshellarg($code) . ' ' . escapeshellarg(dirname(__DIR__)));
-$sum = json_decode((string)$o, true);
-ok(is_array($sum) && $sum['total'] === 4 && $sum['ok'] === 4, 'ALARM-Mail: 2 Ziel-Adressen + Autor + CC = 4 Empfänger: ' . trim((string)$o));
+$o = shell_exec('SBCM_LOCAL_CONFIG=' . escapeshellarg($local) . " $php -r " . escapeshellarg($code) . ' ' . escapeshellarg(dirname(__DIR__)) . ' ' . (int)$resM['id']);
+[$sum, $sum2] = json_decode((string)$o, true) ?: [null, null];
+ok(is_array($sum) && $sum['total'] === 7 && $sum['ok'] === 7, 'ALARM-Mail: 2 (Allgemein) + 2 (IT) + 1 Standort + Autor + CC = 7 Empfänger: ' . trim((string)$o));
+ok(is_array($sum2) && $sum2['total'] === 3, 'Ende-Mail nur an den gewählten Kreis + Autor + CC');
 $latest = '';
+$endMail = '';
 foreach (glob(storage_dir() . '/outbox/*.eml') as $f) {
     $c = (string)file_get_contents($f);
     if (str_contains($c, 'geheim1@ziel.example')) {
         $latest = $c;
     }
+    if (str_contains($c, 'boa@ziel.example')) {
+        $endMail = $c;
+    }
 }
-$headers = explode("\r\n\r\n", $latest)[0] ?? '';
-ok($latest !== '', 'Alarm-Mail wurde an die Ziel-Adressen übergeben (Envelope)');
-$visible = preg_replace('/^X-Envelope-Rcpt:.*\r\n/', '', $latest) ?? '';
-ok(str_contains($visible, 'To: undisclosed-recipients:;') && !str_contains($visible, 'geheim'),
+ok($latest !== '' && str_contains($latest, 'verwaltung.ham@ziel.example'), 'Alarm-Mail wurde an Kreise und Standortverwaltung übergeben (Envelope)');
+$visible = preg_replace('/^X-Envelope-Rcpt:.*\r\n/m', '', $latest) ?? '';
+ok(str_contains($visible, 'To: undisclosed-recipients:;') && !str_contains($visible, 'geheim') && !str_contains($visible, 'verwaltung'),
     'Ziel-Adressen stehen nicht in den sichtbaren Mail-Headern (BCC)');
+$plain = function (string $eml): string {
+    [$head, $body] = explode("\r\n\r\n", $eml, 2) + ['', ''];
+    return iconv_mime_decode_headers($head, 0, 'UTF-8')['Subject'] . "\n" . base64_decode(str_replace("\r\n", '', $body));
+};
+ok(str_starts_with($plain($latest), '[NOTFALL] Statusmeldung') && str_contains($plain($latest), 'https://teams.example/meet/1, Konferenz-ID 123 456#'),
+    'Betreff-Präfix und Kontakt in der ALARM-Mail');
+ok(str_starts_with($plain($endMail), '[Entwarnung] Statusmeldung beendet') && str_contains($plain($endMail), 'nicht mehr gültig'), 'Ende-Mail mit eigenem Präfix');
 $lastMail = db()->query('SELECT result_enc FROM ' . t('mail_log') . " WHERE kind = 'alarm'")->fetchColumn();
 ok(!str_contains((string)$lastMail, 'geheim1') && str_contains(dec((string)$lastMail, 'mail.result'), 'g******@z***.example'), 'Protokoll speichert nur maskierte Adressen, verschlüsselt');
 
 /* --- Nutzung: Lesezähler und Login-Statistik --- */
-$sid = (int)status_current()['id'];
+$sid = (int)$resM['id'];
 $_SESSION = [];
 view_count($sid);
 view_count($sid);
@@ -276,19 +421,17 @@ ok(stage1_change('kurz', 'kurz', 'system:test') !== [] && stage1_change('Zugang 
 ok(stage1_change('Zugang fuer alle', 'Zugang fuer alle', 'system:test') === [] && verify_stage1('Zugang fuer alle') && stage1_set_at() !== '', 'Zugangspasswort gesetzt, Datum gespeichert');
 ok(stage1_change('Zugang fuer alle', 'Zugang fuer alle', 'system:test') !== [], 'Gleiches Zugangspasswort wird abgelehnt');
 ok(cc1_change('kaputt', 'system:test') !== null && cc1_change('Neu@Test.example', 'system:test') === null && cc_default_mail1() === 'neu@test.example', 'Kopie-Adresse ersetzt den Konfigurationswert');
-ok(recipients_add("a@ziel.example\nb@ziel.example; a@ziel.example", 'system:test') === [2, null] && count(alarm_recipients()) === 2, 'Empfänger hinzugefügt, Doppelte entfernt');
-ok(recipients_add('x@ziel.example, kaputt', 'system:test')[1] !== null && count(alarm_recipients()) === 2, 'Ungültige Adresse: nichts gespeichert');
-ok(recipients_remove(0, 'system:test') && alarm_recipients() === ['b@ziel.example'] && !recipients_remove(5, 'system:test'), 'Empfänger entfernt');
-$raw = kv_get('set:recipients');
-ok(!str_contains((string)$raw, 'ziel') && !setting_broken('recipients'), 'Einstellungen verschlüsselt gespeichert');
-kv_set('set:recipients', (string)kv_get('set:cc1'));
-setting_get('recipients', true);
-ok(setting_broken('recipients') && recipients_web() === [], 'Vertauschte Einstellung wird erkannt und nicht verwendet');
+$raw = kv_get('set:cc1');
+ok(!str_contains((string)$raw, 'test.example') && !setting_broken('circles'), 'Einstellungen verschlüsselt gespeichert');
+kv_set('set:circles', (string)kv_get('set:cc1'));
+setting_get('circles', true);
+ok(setting_broken('circles') && alarm_circles()[0]['id'] === 'allgemein', 'Vertauschte Einstellung wird erkannt und nicht verwendet');
 $chk = system_check();
-ok(count(array_filter($chk, fn($c) => str_contains($c[1], 'Einstellung recipients nicht lesbar') && !$c[0])) === 1, 'Systemprüfung meldet die Manipulation');
-recipients_add('b@ziel.example', 'system:test');
-$labels = array_column(audit_recent(40), 'action');
-ok(in_array('setting.stage1', $labels, true) && in_array('setting.cc1', $labels, true) && in_array('setting.recipient_remove', $labels, true), 'Einstellungsänderungen im Audit-Log');
+ok(count(array_filter($chk, fn($c) => str_contains($c[1], 'Einstellung circles nicht lesbar') && !$c[0])) === 1, 'Systemprüfung meldet die Manipulation');
+$labels = array_column(audit_recent(80), 'action');
+ok(!array_diff(['setting.stage1', 'setting.cc1', 'setting.circle_update', 'setting.circle_delete', 'setting.location_update', 'setting.contact_create',
+    'setting.mail_prefix', 'mail.alarm', 'status.end'], $labels), 'Einstellungsänderungen im Audit-Log');
+ok(audit_verify()['ok'], 'Audit-Kette nach allen Änderungen intakt');
 
 /* --- config.local.inc.php (Installer) --- */
 $code = local_config_code(['db' => ['pass' => "a'b\\c"], 'security' => ['master_key' => 'k']]);

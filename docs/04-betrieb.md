@@ -10,7 +10,7 @@
 | monatlich | **System → Prüfung** und Seite **Benutzer**: Wer braucht den Zugang noch? | Admin |
 | halbjährlich | Übung mit Status "Übung" inkl. ALARM-Mail | Notfallorganisation |
 | jährlich bzw. nach Erinnerung | Zugangspasswort Stufe 1 wechseln (**System**) und neu bekannt geben | Admin |
-| bei Personalwechsel | Benutzer deaktivieren (**Benutzer**), ALARM-Empfänger pflegen (**System**) | Admin |
+| bei Personalwechsel | Benutzer deaktivieren (**Benutzer**), Alarmkreise und Standort-Adressen pflegen (**System**) | Admin |
 
 ## Was wo erledigt wird
 
@@ -19,12 +19,13 @@
 | Ersteinrichtung | `install.php` | `init`, `set-stage1`, `add-user`, … |
 | Benutzer anlegen, zurücksetzen, deaktivieren, Rolle | **Benutzer** | `add-user`, `reset-password`, `disable-user`, `enable-user` |
 | Zugangspasswort Stufe 1 | **System** | `set-stage1` |
-| ALARM-Empfänger, Kopie-Adresse | **System** | `add-recipient`, `remove-recipient`, `set-cc1` |
+| Alarmkreise, Kopie-Adresse | **System** | `add-recipient`, `list-circles`, `remove-recipient`, `set-cc1` |
+| Standorte (Name, Durchwahl, E-Mail Standortverwaltung), Kontakte, Betreff-Präfixe | **System** | – |
 | Prüfung, Protokoll-Kette, Cron-Status | **System → Prüfung** | `check`, `verify-audit` |
 | Anmeldestatistik | **Einstellungen → Nutzung**, **System** | `stats` |
 | Testmail, Cron einmal auslösen | **System** | `php cron.php` |
 | Datenbank-, SMTP-Daten ändern | `config.local.inc.php` per FTP bearbeiten | ebenso |
-| Meldungstexte, Standorte, Rufnummern | `config.json` per FTP austauschen (bzw. Git) | ebenso |
+| Meldungstexte, Mail-Vorlagen | `config.json` per FTP austauschen (bzw. Git) | ebenso |
 | Letzter Admin ausgesperrt | Notfallzugang (unten) | `reset-password` |
 
 Browser und Kommandozeile schreiben in dieselben Speicherorte und lassen sich mischen.
@@ -39,7 +40,8 @@ php setup.php list-users                Rollen, Passwortalter, Gültigkeit, TOTP
 php setup.php reset-password <id>       Einmalpasswort (Notfall, z. B. letzter Admin ausgesperrt)
 php setup.php disable-user <id> | enable-user <id>
 php setup.php migrate-users             Benutzer aus config.local.inc.php in die DB übernehmen
-php setup.php add-recipient <mail> | list-recipients | remove-recipient <nr>
+php setup.php add-recipient <mail> [kreis]   Adresse in Alarmkreis (Standard: erster Kreis; neuer Name legt Kreis an)
+php setup.php list-circles | remove-recipient <kreis> <nr>
 php setup.php set-cc1 <mail>            cc_default_mail1 verschlüsselt setzen
 php setup.php encrypt-value <text>      beliebigen Konfigurationswert verschlüsseln
 php setup.php install-db                Tabellen anlegen (passiert sonst automatisch)
@@ -55,7 +57,9 @@ php setup.php totp-check <id> <code>    TOTP-Einrichtung testen
    `php tests/installtest.php`.
 2. Backup von Datenbank und `config.local.inc.php`.
 3. Geänderte Dateien hochladen. `config.local.inc.php` dabei **nicht** überschreiben.
-4. Seite einmal aufrufen. Neue Tabellen legt die Anwendung selbst an. `install.php` nur hochladen, wenn Sie den
+4. Seite einmal aufrufen. Neue Tabellen und Spalten legt die Anwendung selbst an. Für das Update auf 1.3 braucht der
+   Datenbank-Benutzer einmalig das Recht `ALTER` (bei den meisten Hostern ohnehin vergeben). Fehlt es, nennt die Seite
+   den SQL-Befehl, den Sie alternativ in phpMyAdmin ausführen. `install.php` nur hochladen, wenn Sie den
    Notfallzugang brauchen; eingerichtet ist es ohnehin gesperrt.
 5. **System → Prüfung** ansehen (mit SSH auch `php setup.php check`).
 
@@ -115,7 +119,7 @@ GRANT LOCK TABLES                    ON statusbcm.*                  TO 'statusb
 ```
 
 Danach kann selbst die Anwendung das Protokoll nicht mehr ändern, nur noch ergänzen. Vor einem Update mit neuen
-Tabellen müssen die Rechte vorübergehend erweitert werden (CREATE).
+Tabellen oder Spalten müssen die Rechte vorübergehend erweitert werden (`CREATE`, `ALTER`).
 
 ## Tests
 

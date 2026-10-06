@@ -167,8 +167,20 @@
         "",
         "{locations}",
         "Rückfragen: {phone}",
+        "{contacts}",
         "{validity}",
         "",
+        "Aktuelle Informationen (Anmeldung erforderlich): {url}",
+        "",
+        "Diese Nachricht wurde automatisch erstellt. Bitte nicht antworten."
+      ]
+    },
+    "alarm_end": {
+      "subject": "{prefix}Statusmeldung beendet: {label}",
+      "body": [
+        "{prefix}Die Statusmeldung \"{label}\" ist nicht mehr gültig (zurückgenommen bzw. gelöst).",
+        "",
+        "{locations}",
         "Aktuelle Informationen (Anmeldung erforderlich): {url}",
         "",
         "Diese Nachricht wurde automatisch erstellt. Bitte nicht antworten."
