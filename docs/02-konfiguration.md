@@ -9,7 +9,7 @@ Status-BCM hat drei Konfigurationsdateien:
 | `config.json` | Status-Katalog, Standorte, Mail-Vorlagen, kritische Begriffe | ja |
 
 Dazu kommen die Einstellungen, die Admins im Browser unter **System** pflegen: Zugangspasswort Stufe 1,
-Kopie-Adresse, Alarmkreise, Standorte (mit E-Mail der Standortverwaltung), Kontakte für Meldungen und
+Kopie-Adresse, Adresse im An-Feld, zusätzliche Empfänger je Stufe, Standard-Rufnummer, Alarmkreise, Standorte (mit E-Mail der Standortverwaltung), Kontakte für Meldungen und
 Betreff-Präfixe. Sie liegen verschlüsselt in der Datenbank und haben Vorrang vor `auth.stage1_hash`,
 `mail.cc_default_mail1` und den Standorten in `config.json`. Empfänger aus `mail.recipients` bilden den Kreis
 "Allgemein", bis die Alarmkreise das erste Mal unter **System** gespeichert werden; dann werden sie übernommen.
@@ -88,7 +88,7 @@ Geheimnisse können überall als `enc:v1:…` stehen (erzeugt mit `php setup.php
 ### Standorte
 
 `id` (`a-z0-9_-`), `name`, `phone`. Ohne `phone` wird `default_phone` angezeigt, bzw. die `phone` des Status, falls
-gesetzt.
+gesetzt. Admins können `default_phone` unter **System → Standard-Rufnummer** im Browser überschreiben.
 
 Die Liste in `config.json` ist nur der Startwert. Sobald ein Admin unter **System → Standorte** etwas speichert, gilt
 die Liste aus dem Browser (verschlüsselt in der Datenbank, mit den E-Mail-Adressen der Standortverwaltungen).

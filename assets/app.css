@@ -1,6 +1,16 @@
 /* Status-BCM – Ergänzungen zu Bootstrap 5.3 (nur CSS, kein JavaScript). Mobile First: Basis = Smartphone. */
 
 .app-wrap{max-width:46rem}
+
+/* Barrierefreiheit (WCAG 2.1 AA): Bootstrap-Blau #0d6efd erreicht auf dem hellgrauen Seitenhintergrund nur 4,3:1.
+   Dunkleres Blau für Links und Navigation (≥ 6:1), Code-Farbe ebenso. */
+:root{--bs-link-color:#0a58ca;--bs-link-color-rgb:10,88,202;--bs-link-hover-color:#084298;--bs-link-hover-color-rgb:8,66,152;--bs-code-color:#a52a64}
+.nav-pills{--bs-nav-link-color:#0a58ca;--bs-nav-link-hover-color:#084298}
+.btn-outline-secondary{--bs-btn-color:#51585e;--bs-btn-border-color:#51585e}
+.btn-outline-primary{--bs-btn-color:#0a58ca;--bs-btn-border-color:#0a58ca}
+/* Deutlich sichtbarer Tastaturfokus auf allen bedienbaren Elementen (WCAG 2.4.7) */
+a:focus-visible,.btn:focus-visible,.nav-link:focus-visible,summary:focus-visible{outline:3px solid #084298;outline-offset:2px}
+summary{cursor:pointer}
 .app-title{font-size:1.25rem;margin:0}
 
 /* Statuskarte: farbiger Balken links je Schweregrad */
@@ -9,7 +19,9 @@
 .sev-info{--sev:var(--bs-primary)}
 .sev-warn{--sev:var(--bs-warning)}
 .sev-critical{--sev:var(--bs-danger)}
-.status-gone{--sev:var(--bs-secondary-bg);opacity:.65;filter:grayscale(1)}
+/* Beendet/abgelaufen: grau abgesetzt, Text behält vollen Kontrast (WCAG 1.4.3) */
+.status-gone{--sev:var(--bs-secondary-border-subtle);background:var(--bs-secondary-bg-subtle);border-style:dashed}
+.status-scope{font-weight:700;text-transform:uppercase;letter-spacing:.04em}
 .status-label{font-size:1.35rem;font-weight:700;line-height:1.25}
 
 /* Große Touch-Ziele auf dem Smartphone */

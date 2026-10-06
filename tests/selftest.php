@@ -339,8 +339,8 @@ echo json_encode([$r, $r2]);
 PHP;
 $o = shell_exec('SBCM_LOCAL_CONFIG=' . escapeshellarg($local) . " $php -r " . escapeshellarg($code) . ' ' . escapeshellarg(dirname(__DIR__)) . ' ' . (int)$resM['id']);
 [$sum, $sum2] = json_decode((string)$o, true) ?: [null, null];
-ok(is_array($sum) && $sum['total'] === 7 && $sum['ok'] === 7, 'ALARM-Mail: 2 (Allgemein) + 2 (IT) + 1 Standort + Autor + CC = 7 Empfänger: ' . trim((string)$o));
-ok(is_array($sum2) && $sum2['total'] === 3, 'Ende-Mail nur an den gewählten Kreis + Autor + CC');
+ok(is_array($sum) && $sum['total'] === 8 && $sum['ok'] === 8, 'ALARM-Mail: An-Feld (Absender) + 2 (Allgemein) + 2 (IT) + 1 Standort + Autor + CC = 8 Empfänger: ' . trim((string)$o));
+ok(is_array($sum2) && $sum2['total'] === 4, 'Ende-Mail nur an An-Feld + gewählten Kreis + Autor + CC');
 $latest = '';
 $endMail = '';
 foreach (glob(storage_dir() . '/outbox/*.eml') as $f) {
@@ -354,8 +354,8 @@ foreach (glob(storage_dir() . '/outbox/*.eml') as $f) {
 }
 ok($latest !== '' && str_contains($latest, 'verwaltung.ham@ziel.example'), 'Alarm-Mail wurde an Kreise und Standortverwaltung übergeben (Envelope)');
 $visible = preg_replace('/^X-Envelope-Rcpt:.*\r\n/m', '', $latest) ?? '';
-ok(str_contains($visible, 'To: undisclosed-recipients:;') && !str_contains($visible, 'geheim') && !str_contains($visible, 'verwaltung'),
-    'Ziel-Adressen stehen nicht in den sichtbaren Mail-Headern (BCC)');
+ok(str_contains($visible, 'To: status@test.example') && !str_contains($visible, 'undisclosed') && !str_contains($visible, 'geheim') && !str_contains($visible, 'verwaltung'),
+    'An-Feld = Absender, Ziel-Adressen nur als BCC (nicht in den sichtbaren Headern)');
 $plain = function (string $eml): string {
     [$head, $body] = explode("\r\n\r\n", $eml, 2) + ['', ''];
     return iconv_mime_decode_headers($head, 0, 'UTF-8')['Subject'] . "\n" . base64_decode(str_replace("\r\n", '', $body));
@@ -380,6 +380,7 @@ ok(!str_contains((string)kv_get('set:circles'), '1701234567'), 'Signal-Nummern v
 array_map('unlink', glob(storage_dir() . '/outbox/*.json') ?: []);
 $rt = send_alarm_channels('test', 0, 'Test', 'Text', 'system:test', ['circles' => ['it']]);
 ok($rt === ['signal' => [2, 0]] && count(glob(storage_dir() . '/outbox/*-groupalarm-*.json') ?: []) === 0, 'Testnachricht nur über Signal, kein GroupAlarm');
+array_map('unlink', glob(storage_dir() . '/outbox/*.json') ?: []);
 $rc = send_alarm_channels('new', (int)$resM['id'], '[NOTFALL] Statusmeldung', 'Bitte Hinweise beachten.', 'anna', ['circles' => ['it']]);
 $ga = json_decode((string)file_get_contents((glob(storage_dir() . '/outbox/*-groupalarm-*.json') ?: [''])[0]), true) ?: [];
 $sg = (string)file_get_contents((glob(storage_dir() . '/outbox/*-signal-*.json') ?: [''])[0]);
@@ -477,6 +478,33 @@ ok(stage1_user_change('Unternehmen', 'system:test') === null && login_name_key(s
     && throws(fn() => account_action('create', 'unternehmen', ['name' => 'X', 'email' => 'x@test.example'], 'anna')),
     'Gemeinsamer Zugang umbenannt; gleichnamige persönliche Kennung wird abgelehnt');
 ok(cc1_change('kaputt', 'system:test') !== null && cc1_change('Neu@Test.example', 'system:test') === null && cc_default_mail1() === 'neu@test.example', 'Kopie-Adresse ersetzt den Konfigurationswert');
+// Zusätzliche Empfänger je Stufe, An-Feld, Standard-Rufnummer
+ok(level_cc_update('gibtsnicht', 'a@test.example', [], 'system:test') !== null && level_cc_update('critical', 'kaputt', [], 'system:test') !== null,
+    'Stufen-Empfänger: unbekannte Stufe und ungültige Adresse abgelehnt');
+ok(level_cc_update('critical', "Leitung@Test.example\nisb@test.example", [], 'system:test') === null && level_cc()['critical'] === ['leitung@test.example', 'isb@test.example']
+    && level_cc()['warn'] === [] && level_cc_update('critical', 'isb@test.example', [], 'system:test') !== null, 'Stufen-Empfänger je Stufe gespeichert, Dubletten abgelehnt');
+ok(!str_contains((string)kv_get('set:level_cc'), 'test.example'), 'Stufen-Empfänger verschlüsselt gespeichert');
+[$lt] = alarm_targets(['circles' => []], ['severity' => 'critical']);
+[$lw] = alarm_targets(['circles' => []], ['severity' => 'warn']);
+ok($lt === ['leitung@test.example', 'isb@test.example'] && $lw === [], 'Stufen-Empfänger nur bei ihrer Stufe im Verteiler');
+ok(level_cc_update('critical', '', [1], 'system:test') === null && level_cc()['critical'] === ['leitung@test.example'], 'Stufen-Empfänger entfernt');
+$la = db()->query('SELECT seq, details_enc FROM ' . t('audit') . " WHERE action = 'setting.level_cc' ORDER BY seq DESC LIMIT 1")->fetch(PDO::FETCH_NUM);
+$laPlain = $la ? dec((string)$la[1], 'audit:' . $la[0]) : '';
+ok(str_contains($laPlain, 'Wichtiger Hinweis') && str_contains($laPlain, '-i**@') && !str_contains($laPlain, 'isb@'), 'Protokoll der Stufen-Empfänger mit Stufe, nur maskiert');
+ok(alarm_to_address() === 'status@test.example', 'An-Feld: ohne Eintrag die Absenderadresse');
+ok(alarm_to_change('kaputt', 'system:test') !== null && alarm_to_change('Verteiler@Test.example', 'system:test') === null && alarm_to_address() === 'verteiler@test.example'
+    && alarm_to_change('', 'system:test') === null && alarm_to_address() === 'status@test.example', 'An-Feld: hinterlegte Adresse, leer = zurück auf Absender');
+ok(default_phone_change('abc', 'system:test') !== null && default_phone_change('+49 800 1234', 'system:test') === null && bcm()['default_phone'] === '+49 800 1234',
+    'Standard-Rufnummer unter System geändert');
+ok(build_payload(bcm()['by_key']['ok'] ?? array_values(bcm()['by_key'])[0], ['nue-mitte'])['locations'][0]['phone'] === '+49 800 1234', 'Standort ohne Rufnummer zeigt die Standard-Rufnummer');
+ok(default_phone_change('', 'system:test') === null && bcm()['default_phone'] === $j['default_phone'], 'Standard-Rufnummer leer = Wert aus config.json');
+$allIds = array_column(bcm()['locations'], 'id');
+ok(status_for_all(['audience' => 'ALLE', 'locations' => [['id' => 'muc-sued']]]) && status_for_all(['locations' => []])
+    && status_for_all(['locations' => array_map(fn($i) => ['id' => $i], $allIds)]) && !status_for_all(['locations' => [['id' => 'muc-sued']]]), '"Für alle" bei allen Standorten');
+ob_start();
+render_status_card(['payload' => ['audience' => 'ALLE'] + build_payload(bcm()['by_key']['MAIL_EINGESCHRAENKT'], [])]);
+$card = (string)ob_get_clean();
+ok(strpos($card, 'Für alle:') !== false && strpos($card, 'Für alle:') < strpos($card, 'status-label'), '"Für alle:" steht über dem Status-Titel');
 $raw = kv_get('set:cc1');
 ok(!str_contains((string)$raw, 'test.example') && !setting_broken('circles'), 'Einstellungen verschlüsselt gespeichert');
 kv_set('set:circles', (string)kv_get('set:cc1'));

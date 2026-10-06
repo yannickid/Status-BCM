@@ -18,10 +18,18 @@ foreach ($board['live'] as $r) {
     view_count((int)$r['id']); // anonym: einmal je Sitzung und Meldung
 }
 
-page_start('Status', ['refresh' => 120]);
+// Automatische Aktualisierung abschaltbar (WCAG 2.2.1/2.2.2: Screenreader verlieren sonst alle 2 Minuten die Position)
+if (isset($_GET['auto'])) {
+    $_SESSION['no_refresh'] = $_GET['auto'] === '0';
+}
+$auto = empty($_SESSION['no_refresh']);
+page_start('Status', $auto ? ['refresh' => 120] : []);
 nav('status');
 echo '<h1 class="visually-hidden">Aktuelle Meldungen</h1>';
+// Hinweis vor den Meldungen, damit er vor der nächsten Aktualisierung erreichbar ist
+echo '<p class="small text-body-secondary">' . ($auto
+    ? 'Diese Seite aktualisiert sich alle 2 Minuten. <a href="status.php?auto=0">Automatische Aktualisierung ausschalten</a>'
+    : 'Automatische Aktualisierung ist aus. <a href="status.php">Seite neu laden</a> · <a href="status.php?auto=1">Wieder einschalten</a>') . '</p>';
 render_flash();
 render_board($board, false);
-echo '<p class="small text-body-secondary">Diese Seite aktualisiert sich automatisch alle 2 Minuten.</p>';
 page_end();

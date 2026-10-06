@@ -55,7 +55,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             : 'Testmail fehlgeschlagen. SMTP-Daten in config.local.inc.php prüfen (Fehlerdetails im Server-Fehlerlog).');
         redirect('system.php');
     } elseif (!in_array($act, ['circle_create', 'circle_update', 'circle_delete', 'circle_channels', 'signal_test', 'location_save', 'location_delete',
-        'contact_save', 'contact_delete', 'prefix', 'cc1', 'stage1', 'stage1_user'], true)) {
+        'contact_save', 'contact_delete', 'prefix', 'cc1', 'alarm_to', 'level_cc', 'default_phone', 'stage1', 'stage1_user'], true)) {
         $errors[] = 'Ungültige Aktion.';
     } elseif ($err = admin_totp_check($user, 'system', $act)) {
         $errors[] = $err;
@@ -67,6 +67,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             'location_save' => 'Standort gespeichert.', 'location_delete' => 'Standort gelöscht.',
             'contact_save' => 'Kontakt gespeichert.', 'contact_delete' => 'Kontakt gelöscht.',
             'prefix' => 'Betreff-Präfixe gespeichert.', 'cc1' => 'Kopie-Adresse gespeichert.',
+            'alarm_to' => 'Adresse im An-Feld gespeichert.', 'level_cc' => 'Zusätzliche Empfänger der Stufe gespeichert.',
+            'default_phone' => 'Standard-Rufnummer gespeichert.',
             'stage1_user' => 'Benutzername des gemeinsamen Zugangs geändert. Bitte allen Beschäftigten bekannt geben.',
             'circle_channels' => 'Signal/GroupAlarm des Kreises gespeichert.', 'signal_test' => 'Signal-Testnachricht übergeben. Bitte Empfang prüfen.',
             'stage1' => 'Zugangspasswort geändert. Bitte allen Beschäftigten auf dem üblichen internen Weg bekannt geben.',
@@ -116,6 +118,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 break;
             case 'stage1_user':
                 $err = stage1_user_change((string)($_POST['name'] ?? ''), $user['id'], $how);
+                break;
+            case 'alarm_to':
+                $err = alarm_to_change((string)($_POST['email'] ?? ''), $user['id'], $how);
+                break;
+            case 'level_cc':
+                $err = level_cc_update((string)($_POST['level'] ?? ''), (string)($_POST['emails'] ?? ''),
+                    array_map('intval', (array)($_POST['rm'] ?? [])), $user['id'], $how);
+                break;
+            case 'default_phone':
+                $err = default_phone_change((string)($_POST['phone'] ?? ''), $user['id'], $how);
                 break;
             case 'cc1':
                 $err = cc1_change((string)($_POST['email'] ?? ''), $user['id'], $how);
@@ -261,7 +273,7 @@ $locForm = function (array $l, string $sfx): string {
     return '<form method="post" action="system.php" class="mt-2" autocomplete="off">' . csrf_field()
         . '<input type="hidden" name="action" value="location_save"><input type="hidden" name="id" value="' . h($l['id']) . '">'
         . '<label class="form-label small" for="ln' . $sfx . '">Name</label><input class="form-control mb-2" id="ln' . $sfx . '" name="name" maxlength="80" value="' . h($l['name']) . '" required>'
-        . '<label class="form-label small" for="lp' . $sfx . '">Durchwahl (optional)</label><input class="form-control mb-2" id="lp' . $sfx . '" name="phone" type="tel" maxlength="40" value="' . h($l['phone']) . '">'
+        . '<label class="form-label small" for="lp' . $sfx . '">Durchwahl (optional; leer = Standard-Rufnummer)</label><input class="form-control mb-2" id="lp' . $sfx . '" name="phone" type="tel" maxlength="40" value="' . h($l['phone']) . '">'
         . ($l['id'] !== '' ? email_remove_list($l['emails'], $sfx) : '')
         . '<label class="form-label small" for="le' . $sfx . '">E-Mail Standortverwaltung hinzufügen (eine je Zeile)</label>'
         . '<textarea class="form-control mb-2" id="le' . $sfx . '" name="emails" rows="2"></textarea>'
@@ -322,6 +334,42 @@ echo '<p class="small text-body-secondary">Erhält Erinnerungen bei Ablauf, Kopi
 echo '<form method="post" action="system.php" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="cc1">'
     . '<label class="form-label small" for="cc">Neue Adresse</label><input class="form-control mb-2" id="cc" type="email" name="email" required>'
     . totp_input('cc') . '<button class="btn btn-sm btn-primary" type="submit">Speichern</button></form>';
+echo '</div></div>';
+
+/* An-Feld der ALARM-Mail */
+$to = alarm_to_address();
+echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Adresse im An-Feld der ALARM-Mail</h2>';
+echo '<p class="small text-body-secondary">ALARM-Mails gehen <strong>an</strong> diese Adresse; alle Empfänger aus Kreisen, Stufen und Standorten stehen nur im '
+    . '<strong>BCC</strong> und sehen sich gegenseitig nicht. Leer = Absenderadresse. Aktuell: <strong>' . h($to !== '' ? mask_email($to) : 'keine') . '</strong>'
+    . (is_string(setting_get('alarm_to')) && setting_get('alarm_to') !== '' ? '' : ' (Absenderadresse)') . '</p>';
+echo '<form method="post" action="system.php" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="alarm_to">'
+    . '<label class="form-label small" for="at">Neue Adresse (leer = Absenderadresse)</label><input class="form-control mb-2" id="at" type="email" name="email">'
+    . totp_input('at') . '<button class="btn btn-sm btn-primary" type="submit">Speichern</button></form>';
+echo '</div></div>';
+
+/* Zusätzliche Empfänger je Stufe */
+$lcc = level_cc();
+echo '<div class="card shadow-sm mb-3" id="stufen"><div class="card-body"><h2 class="h5">Zusätzliche Empfänger je Stufe</h2>';
+echo '<p class="small text-body-secondary">Diese Adressen erhalten jede ALARM-Mail einer Meldung dieser Stufe zusätzlich zu den gewählten Alarmkreisen '
+    . '(per BCC, verschlüsselt gespeichert, nur maskiert sichtbar).</p>';
+foreach (SBCM_LEVELS as $lv => $lvName) {
+    echo '<details class="mt-2"><summary>' . h($lvName) . ' (' . count($lcc[$lv]) . ')</summary>'
+        . '<form method="post" action="system.php" class="mt-2" autocomplete="off">' . csrf_field()
+        . '<input type="hidden" name="action" value="level_cc"><input type="hidden" name="level" value="' . h($lv) . '">'
+        . email_remove_list($lcc[$lv], 'lv' . $lv)
+        . '<label class="form-label small" for="lv' . h($lv) . '">Adressen hinzufügen (eine je Zeile)</label>'
+        . '<textarea class="form-control mb-2" id="lv' . h($lv) . '" name="emails" rows="2"></textarea>'
+        . totp_input('lv' . $lv) . '<button class="btn btn-sm btn-primary" type="submit">Speichern</button></form></details>';
+}
+echo '</div></div>';
+
+/* Standard-Rufnummer */
+echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Standard-Rufnummer</h2>';
+echo '<p class="small text-body-secondary">Erscheint bei Meldungen ohne Standortliste und bei jedem Standort ohne eigene Durchwahl. '
+    . 'Aktuell: <strong>' . h(bcm()['default_phone']) . '</strong>' . (is_string(setting_get('default_phone')) && setting_get('default_phone') !== '' ? '' : ' (aus config.json)') . '</p>';
+echo '<form method="post" action="system.php" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="default_phone">'
+    . '<label class="form-label small" for="dp">Neue Rufnummer (leer = Wert aus config.json)</label><input class="form-control mb-2" id="dp" type="tel" name="phone" maxlength="40">'
+    . totp_input('dp') . '<button class="btn btn-sm btn-primary" type="submit">Speichern</button></form>';
 echo '</div></div>';
 
 /* Zugangspasswort Stufe 1 */

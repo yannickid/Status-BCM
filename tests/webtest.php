@@ -116,6 +116,12 @@ try {
         'Persönliche Kennung auf der Startseite: mit TOTP direkt mit Einstellungen angemeldet');
     [$c, , $b] = req('GET', "$base/status.php", [], $jar);
     ok($c === 200 && str_contains($b, 'Regelbetrieb'), 'status.php zeigt Regelbetrieb');
+    ok(str_contains($b, 'http-equiv="refresh"') && str_contains($b, 'href="status.php?auto=0"'), 'Automatische Aktualisierung mit Link zum Abschalten');
+    [, , $b] = req('GET', "$base/status.php?auto=0", [], $jar);
+    [, , $b2] = req('GET', "$base/status.php", [], $jar);
+    ok(!str_contains($b, 'http-equiv="refresh"') && !str_contains($b2, 'http-equiv="refresh"') && str_contains($b2, 'href="status.php?auto=1"'),
+        'Automatische Aktualisierung bleibt für die Sitzung aus (WCAG 2.2.1)');
+    req('GET', "$base/status.php?auto=1", [], $jar);
 
     /* --- Login Stufe 2 --- */
     [$c, , $b] = req('GET', "$base/change.php", [], $jar);
@@ -157,14 +163,16 @@ try {
     [$c] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'commit', 'pending_id' => $pid, 'totp' => $code], $jar);
     ok($c === 302, 'Mit gültigem TOTP verbindlich gesetzt');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
-    ok(str_contains($b, 'Meldung gesetzt: Sicherheitsmaßnahme') && str_contains($b, 'ALARM-Mail an 4 Adressen'), 'Rückmeldung inkl. Alarm-Versand');
+    ok(str_contains($b, 'Meldung gesetzt: Sicherheitsmaßnahme') && str_contains($b, 'ALARM-Mail an 5 Adressen'), 'Rückmeldung inkl. Alarm-Versand (An-Feld + Empfänger)');
+    ok(!str_contains($b, 'Stufe 2 beenden') && !str_contains($b, 'logout2') && str_contains($b, 'Abmelden oben rechts'), 'Kein eigener Knopf "Stufe 2 beenden" mehr');
     ok(str_contains($b, 'Integrität der Protokollkette: OK'), 'Audit-Kette im Protokoll OK');
-    ok(!str_contains($b, 'ziel1@') && str_contains($b, 'recipients: 4'), 'Protokoll zeigt Empfänger nur als Anzahl');
+    ok(!str_contains($b, 'ziel1@') && str_contains($b, 'recipients: 5'), 'Protokoll zeigt Empfänger nur als Anzahl');
 
     [, , $b2] = req('GET', "$base/status.php", [], $jar2);
     ok(str_contains($b2, 'Sicherheitsmaßnahme') && str_contains($b2, 'Standort München Süd') && str_contains($b2, '+49 89 12345-110'),
         'Statusseite zeigt neuen Status mit Standort und Durchwahl');
     ok(str_contains($b2, 'Standort Nürnberg Mitte') && str_contains($b2, '+49 30 12345-0'), 'Standort ohne Durchwahl zeigt default_phone');
+    ok(str_contains($b2, '(zentrale Rufnummer)') && !str_contains($b2, 'Für alle:'), 'Standard-Rufnummer gekennzeichnet; nur zwei Standorte, daher kein "Für alle"');
     ok(!str_contains($b2, 'Übung Leitstelle'), 'Interne Notiz erscheint nicht auf der Statusseite');
     req('GET', "$base/status.php", [], $jar2);
     [, , $b] = req('GET', "$base/change.php", [], $jar);
@@ -276,6 +284,14 @@ try {
     ok(!str_contains($b2, 'verwaltung') && !str_contains($b2, 'ziel.example'), 'Statusseite zeigt keine Verteiler-Adressen');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     ok(str_contains($b, 'name="circles[]" value="it"') && str_contains($b, 'Krisenstab-Konferenz'), 'Kreise und Kontakte im Meldungsformular wählbar');
+    [$c] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'level_cc', 'level' => 'critical', 'emails' => 'leitung@ziel.example',
+        'totp' => fresh_code($secret)], $jar);
+    [$c2] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'default_phone', 'phone' => '+49 800 5555', 'totp' => fresh_code($secret)], $jar);
+    [, , $b] = req('GET', "$base/system.php", [], $jar);
+    ok($c === 302 && $c2 === 302 && str_contains($b, 'Zusätzliche Empfänger je Stufe') && !str_contains($b, 'leitung@') && preg_match('/l\*+@z\*+\.example/', $b) === 1
+        && str_contains($b, 'Adresse im An-Feld') && str_contains($b, '(Absenderadresse)'), 'Stufen-Empfänger maskiert, An-Feld und Standard-Rufnummer unter System');
+    [, , $b2] = req('GET', "$base/status.php", [], $jar2);
+    ok(str_contains($b2, '+49 800 5555'), 'Statusseite zeigt die geänderte Standard-Rufnummer');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     ok(str_contains($b, 'Alarmkreis angelegt') && str_contains($b, 'Betreff-Präfixe geändert') && str_contains($b, 'Integrität der Protokollkette: OK'),
         'Systemänderungen im Protokoll');
@@ -330,7 +346,7 @@ try {
         }
     }
     $vis = preg_replace('/^X-Envelope-Rcpt:.*\r\n/', '', $alarm) ?? '';
-    ok($alarm !== '' && str_contains($vis, 'To: undisclosed-recipients:;') && !str_contains($vis, 'ziel'), 'Alarm-Mail nur per BCC');
+    ok($alarm !== '' && str_contains($vis, 'To: status@test.example') && !str_contains($vis, 'undisclosed') && !str_contains($vis, 'ziel'), 'Alarm-Mail an die Absenderadresse, Empfänger nur per BCC');
 
     /* --- Cron per URL --- */
     [$c] = req('GET', "$base/cron.php");
