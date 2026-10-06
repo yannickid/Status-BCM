@@ -342,6 +342,9 @@ if (is_array($pending) && ($pending['user'] ?? '') === $user['id'] && time() - (
     $needs = spec_needs_totp($spec);
     $title = ['set' => 'Neue Meldung', 'extend' => 'Meldung verlängern', 'update' => 'Meldung ändern', 'end' => 'Meldung beenden'][$spec['mode']];
     echo '<h2 class="h5">Vorschau: ' . h($title) . ' – bitte prüfen</h2>';
+    echo '<p class="small text-body-secondary">Diese Vorschau gilt bis <strong>'
+        . h((new DateTimeImmutable('@' . ((int)$pending['t'] + $ttl)))->setTimezone(app_tz())->format('H:i')) . ' Uhr</strong> ('
+        . (int)ceil($ttl / 60) . ' Minuten). Danach bitte neu vorbereiten.</p>';
     if ($spec['mode'] === 'end') {
         echo '<p class="text-body-secondary small">Die Meldung wird beendet und bleibt ' . (int)cfg('display.keep_hours', 48)
             . ' Stunden ausgegraut mit dem Vermerk "zurückgenommen / gelöst" sichtbar:</p>';
