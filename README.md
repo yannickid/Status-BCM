@@ -88,6 +88,29 @@ Cron (alle 5 Minuten), je nach Hoster eine der beiden Varianten:
   `.htaccess` nicht** – dort `config.json` und `storage/` per Pfad (`app.json_path`, `app.storage_dir`) aus dem Webroot
   verlegen.
 
+### Rufnummer je Status (`phone` in `config.json`)
+
+Optional. Ersetzt für diesen Status `default_phone` (auch bei Standorten ohne eigene Durchwahl), z. B. eine Mobilnummer
+für "Eingeschränkte telefonische Erreichbarkeit", wenn das Festnetz selbst betroffen ist.
+
+### Warum der Status-Katalog in `config.json` liegt (nicht in MySQL)
+
+* Die Texte sind freigegebene Bausteine. In Git sind Änderungen nachvollziehbar und lassen sich vor dem Hochladen prüfen
+  (Vier-Augen-Prinzip, `php setup.php check`).
+* Die Datenbank ist auf einem Webspace die exponiertere Stelle: Ihre Zugangsdaten liegen beim PHP-Prozess, und eine
+  SQL-Lücke oder ein geleaktes DB-Passwort reicht für Änderungen. Für `config.json` braucht ein Angreifer Schreibzugriff
+  auf das Dateisystem (FTP/SSH).
+* Was in der DB liegt, ist trotzdem geschützt: Jeder gesetzte Status speichert seinen Text verschlüsselt mit Zeilen-MAC,
+  Änderungen an der DB fallen auf.
+* Empfehlung: `config.json` schreibgeschützt hochladen (`chmod 0444`) und, wo möglich, über `app.json_path` außerhalb
+  des Webroots ablegen. `php setup.php check` warnt, wenn die Datei für PHP beschreibbar ist.
+
+### Spezifische Ausfälle öffentlich benennen?
+
+Die Statusseite wird so behandelt, als wäre sie öffentlich (gemeinsames Passwort). Deshalb nennen die Status Netzwerk,
+Telefon und E-Mail nur die **eingeschränkte Erreichbarkeit** und den Ausweichweg, nie Ursache, Umfang oder "Ausfall".
+"Ausfall", "ausgefallen", "Störung" u. ä. stehen in `forbidden_terms`.
+
 ## Design und Datenverbrauch
 
 * **Mobile First** mit Bootstrap 5.3 (nur CSS). Basis ist die Smartphone-Ansicht, ab 576 px werden Schrift und Buttons

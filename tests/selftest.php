@@ -68,6 +68,14 @@ $bad = $j;
 $bad['mail_templates']['alarm']['subject'] = 'Panne: {label}';
 ok(count(bcm_lint($bad)) === 1, 'Lint prüft auch Mail-Vorlagen');
 
+$bad = $j;
+$bad['statuses'][0]['phone'] = 'bitte anrufen';
+ok(bcm_validate($bad) !== [], 'Validierung erkennt ungültige Status-Rufnummer');
+$tel = build_payload(bcm()['by_key']['TELEFON_EINGESCHRAENKT'], []);
+ok($tel['default_phone'] === '+49 151 12345678', 'Status-eigene Ausweichrufnummer ersetzt default_phone');
+ok(build_payload(bcm()['by_key']['MAIL_EINGESCHRAENKT'], [])['default_phone'] === $j['default_phone'], 'Ohne Status-Rufnummer gilt default_phone');
+ok(critical_terms_in('Ausfall Netzwerk', $j) === ['ausfall'], '"Ausfall" gilt als kritischer Begriff');
+
 /* --- Krypto --- */
 $c = enc('Standort München Süd', 'ctx');
 ok(dec($c, 'ctx') === 'Standort München Süd', 'AES-GCM Roundtrip');

@@ -126,6 +126,9 @@ function bcm_validate($j): array
         if ($text === '' || mb_strlen($text) > 500) {
             $e[] = "$k: text leer oder > 500 Zeichen";
         }
+        if (isset($s['phone']) && (!is_string($s['phone']) || !preg_match('/^[0-9+ ()\/-]{3,40}$/', $s['phone']))) {
+            $e[] = "$k: phone ungültig (nur Ziffern, +, Leerzeichen, ()/-)";
+        }
     }
     $def = (string)($j['default_status'] ?? '');
     if (!isset($keys[$def])) {
@@ -1049,6 +1052,8 @@ function audit_describe(string $action, array $d): string
 function build_payload(array $def, array $locIds, string $note = ''): array
 {
     $b = bcm();
+    // Optionale Ausweichrufnummer je Status (z. B. Mobilnummer bei eingeschränkter Festnetz-Erreichbarkeit)
+    $fallback = trim((string)($def['phone'] ?? '')) ?: $b['default_phone'];
     $locs = [];
     foreach ($locIds as $id) {
         $l = $b['locations_by_id'][$id] ?? null;
@@ -1056,12 +1061,12 @@ function build_payload(array $def, array $locIds, string $note = ''): array
             continue;
         }
         $own = $l['phone'] !== '';
-        $locs[] = ['id' => $id, 'name' => $l['name'], 'phone' => $own ? $l['phone'] : $b['default_phone'], 'default_phone' => !$own];
+        $locs[] = ['id' => $id, 'name' => $l['name'], 'phone' => $own ? $l['phone'] : $fallback, 'default_phone' => !$own];
     }
     return [
         'label' => $def['label'], 'text' => $def['text'], 'severity' => $def['severity'],
         'exercise' => (bool)$def['exercise'], 'audience' => $def['audience'],
-        'locations' => $locs, 'default_phone' => $b['default_phone'], 'note' => $note,
+        'locations' => $locs, 'default_phone' => $fallback, 'note' => $note,
     ];
 }
 

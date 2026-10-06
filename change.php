@@ -291,7 +291,7 @@ echo '<details class="card shadow-sm mb-3"><summary class="card-header fw-semibo
 foreach ($bcm['statuses'] as $s) {
     echo '<li class="list-group-item"><div class="fw-semibold">' . h($s['label']) . '</div><div class="small text-body-secondary mb-1">' . h($s['key'])
         . ' · ' . h($s['audience'] === 'ALLE' ? 'Alle' : 'Alle + Standorte') . ($s['alarm_mail_allowed'] ? ' · Alarm möglich' : '')
-        . ($s['require_totp'] ? ' · TOTP' : '') . '</div>' . h($s['text']) . '</li>';
+        . ($s['require_totp'] ? ' · TOTP' : '') . (!empty($s['phone']) ? ' · Rufnummer: ' . h($s['phone']) : '') . '</div>' . h($s['text']) . '</li>';
 }
 echo '</ul></details>';
 

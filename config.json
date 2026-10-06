@@ -15,8 +15,8 @@
   "forbidden_terms": [
     "angriff", "hacker", "ransomware", "erpress", "datenleck", "datenabfluss",
     "kompromittiert", "schwachstelle", "versagen", "schuld", "verschulden",
-    "amok", "täter", "terror", "bombe", "geisel", "verletzte", "totalausfall",
-    "katastroph", "panne", "versehentlich", "skandal", "infolge", "ursache",
+    "amok", "täter", "terror", "bombe", "geisel", "verletzte",
+    "katastroph", "panne", "ausfall", "ausgefallen", "zusammenbruch", "lahmgelegt", "störung", "versehentlich", "skandal", "infolge", "ursache",
     "wegen eines", "gestohlen", "vorfall"
   ],
 
@@ -69,6 +69,40 @@
       "severity": "warn",
       "audience": "ALLE",
       "text": "Einzelne digitale Dienste stehen derzeit nur eingeschränkt zur Verfügung. Die Wiederherstellung wird vorbereitet. Bitte nutzen Sie bei dringenden Anliegen die angegebene Rufnummer.",
+      "alarm_mail_allowed": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
+    },
+    {
+      "key": "NETZ_EINGESCHRAENKT",
+      "label": "Eingeschränkte Netzwerkdienste",
+      "severity": "warn",
+      "audience": "ALLE_UND_ADRESSLISTE",
+      "text": "An den genannten Standorten stehen Netzwerk- und Online-Dienste derzeit nur eingeschränkt zur Verfügung. Die Wiederherstellung wird vorbereitet. Bitte beachten Sie die Hinweise Ihrer Vorgesetzten.",
+      "alarm_mail_allowed": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
+    },
+    {
+      "key": "TELEFON_EINGESCHRAENKT",
+      "label": "Eingeschränkte telefonische Erreichbarkeit",
+      "severity": "warn",
+      "audience": "ALLE",
+      "phone": "+49 151 12345678",
+      "text": "Die telefonische Erreichbarkeit über das Festnetz ist derzeit eingeschränkt. Bitte nutzen Sie für dringende Anliegen alternative Wege, etwa Mobiltelefone, oder die angegebene Rufnummer.",
+      "alarm_mail_allowed": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
+    },
+    {
+      "key": "MAIL_EINGESCHRAENKT",
+      "label": "Eingeschränkte Erreichbarkeit per E-Mail",
+      "severity": "warn",
+      "audience": "ALLE",
+      "text": "Der E-Mail-Verkehr ist derzeit eingeschränkt. Nachrichten können verzögert oder vorerst nicht zugestellt werden. Bitte nutzen Sie für dringende Anliegen das Telefon.",
       "alarm_mail_allowed": true,
       "require_validity": true,
       "allow_unlimited": false,

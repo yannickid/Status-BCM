@@ -237,6 +237,7 @@ switch ($cmd) {
             $chk(false, 'Datenbank: ' . $e->getMessage());
         }
         $errs = bcm_validate(json_decode((string)file_get_contents((string)cfg('app.json_path')), true) ?? []);
+        $chk(!is_writable((string)cfg('app.json_path')), 'config.json für PHP schreibgeschützt (chmod 0444)');
         $chk(!$errs, 'config.json Struktur' . ($errs ? ': ' . implode('; ', $errs) : ''));
         foreach (bcm_lint(bcm()) as $w) {
             $chk(false, 'Textprüfung: ' . $w);
