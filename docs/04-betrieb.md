@@ -1,0 +1,128 @@
+# Betrieb
+
+## Regelmäßige Aufgaben
+
+| Wann | Was | Wer |
+|---|---|---|
+| alle 5 Min. | `cron.php?t=…` (Erinnerungen, Audit-Anker, Aufräumen); Adresse unter **System** | automatisch (Hoster-Cron oder Cron-Dienst) |
+| täglich | Audit-Anker-Mail prüfen und archivieren (Betreff "Status-BCM Audit-Anker"); "Audit-Kette: OK" muss darin stehen | ISB / `cc_default_mail1` |
+| täglich | Datenbank-Backup | Hoster |
+| monatlich | **System → Prüfung** und Seite **Benutzer**: Wer braucht den Zugang noch? | Admin |
+| halbjährlich | Übung mit Status "Übung" inkl. ALARM-Mail | Notfallorganisation |
+| jährlich bzw. nach Erinnerung | Zugangspasswort Stufe 1 wechseln (**System**) und neu bekannt geben | Admin |
+| bei Personalwechsel | Benutzer deaktivieren (**Benutzer**), ALARM-Empfänger pflegen (**System**) | Admin |
+
+## Was wo erledigt wird
+
+| Aufgabe | Browser (ohne Kommandozeile) | Kommandozeile (optional) |
+|---|---|---|
+| Ersteinrichtung | `install.php` | `init`, `set-stage1`, `add-user`, … |
+| Benutzer anlegen, zurücksetzen, deaktivieren, Rolle | **Benutzer** | `add-user`, `reset-password`, `disable-user`, `enable-user` |
+| Zugangspasswort Stufe 1 | **System** | `set-stage1` |
+| ALARM-Empfänger, Kopie-Adresse | **System** | `add-recipient`, `remove-recipient`, `set-cc1` |
+| Prüfung, Protokoll-Kette, Cron-Status | **System → Prüfung** | `check`, `verify-audit` |
+| Anmeldestatistik | **Einstellungen → Nutzung**, **System** | `stats` |
+| Testmail, Cron einmal auslösen | **System** | `php cron.php` |
+| Datenbank-, SMTP-Daten ändern | `config.local.inc.php` per FTP bearbeiten | ebenso |
+| Meldungstexte, Standorte, Rufnummern | `config.json` per FTP austauschen (bzw. Git) | ebenso |
+| Letzter Admin ausgesperrt | Notfallzugang (unten) | `reset-password` |
+
+Browser und Kommandozeile schreiben in dieselben Speicherorte und lassen sich mischen.
+
+## Befehlsübersicht setup.php (optional)
+
+```
+php setup.php init                      Master-Key + Cron-Token erzeugen
+php setup.php set-stage1                Zugangspasswort Stufe 1 setzen (Datum wird gespeichert)
+php setup.php add-user <id> "<Name>" <mail> [admin|editor] [--config]
+php setup.php list-users                Rollen, Passwortalter, Gültigkeit, TOTP, Integrität
+php setup.php reset-password <id>       Einmalpasswort (Notfall, z. B. letzter Admin ausgesperrt)
+php setup.php disable-user <id> | enable-user <id>
+php setup.php migrate-users             Benutzer aus config.local.inc.php in die DB übernehmen
+php setup.php add-recipient <mail> | list-recipients | remove-recipient <nr>
+php setup.php set-cc1 <mail>            cc_default_mail1 verschlüsselt setzen
+php setup.php encrypt-value <text>      beliebigen Konfigurationswert verschlüsseln
+php setup.php install-db                Tabellen anlegen (passiert sonst automatisch)
+php setup.php check                     Gesamtprüfung inkl. Meldungstexte
+php setup.php verify-audit              Hash-Kette des Protokolls prüfen
+php setup.php stats [Tage]              Anmeldungen und Lesezähler
+php setup.php totp-check <id> <code>    TOTP-Einrichtung testen
+```
+
+## Update auf eine neue Version
+
+1. Neue Version herunterladen (Git oder ZIP). Wer lokal PHP hat: `php tests/selftest.php`, `php tests/webtest.php`,
+   `php tests/installtest.php`.
+2. Backup von Datenbank und `config.local.inc.php`.
+3. Geänderte Dateien hochladen. `config.local.inc.php` dabei **nicht** überschreiben.
+4. Seite einmal aufrufen. Neue Tabellen legt die Anwendung selbst an. `install.php` nur hochladen, wenn Sie den
+   Notfallzugang brauchen; eingerichtet ist es ohnehin gesperrt.
+5. **System → Prüfung** ansehen (mit SSH auch `php setup.php check`).
+
+## Datensicherung und Wiederherstellung
+
+* **Datenbank:** über die Sicherung des Hosters (Kundenmenü) oder `mysqldump --single-transaction --triggers statusbcm > sbcm-YYYYMMDD.sql`.
+  Die Datenbank enthält auch die im Browser gepflegten Einstellungen (verschlüsselt).
+* **config.local.inc.php:** bei jeder Änderung neu sichern, getrennt von der Datenbank.
+* **Wiederherstellung:** Dump einspielen, `config.local.inc.php` zurücklegen, **System → Prüfung** (bzw.
+  `php setup.php verify-audit`). Der Kopf-Hash muss zur Anker-Mail des Sicherungstags passen.
+
+## Notfälle im Betrieb
+
+| Problem | Lösung |
+|---|---|
+| Einziger Admin hat Passwort und/oder Smartphone verloren | Gibt es einen zweiten Admin: **Benutzer → Passwort zurücksetzen / App neu koppeln**. Sonst **Notfallzugang**: per FTP die Datei `storage/notfall.txt` anlegen, Zeile 1 die Benutzerkennung, Zeile 2 eine selbst gewählte Passphrase (mind. 12 Zeichen). Dann `install.php` aufrufen (falls gelöscht, wieder hochladen), Kennung und Passphrase eingeben. Es erscheint ein Einmalpasswort, die App wird neu gekoppelt, die Datei gelöscht, der Vorgang protokolliert. Mit SSH: `php setup.php reset-password <id>`. |
+| Smartphone mit TOTP-App verloren | Ein anderer Admin: **Benutzer → Authenticator-App neu koppeln**. Danach Passwort zurücksetzen, falls nötig. |
+| "Zu viele Versuche" | Nach 15 Min. automatisch wieder frei. Fehlversuche erscheinen im Protokoll. |
+| TOTP-Code wird immer abgelehnt | Uhrzeit auf dem Smartphone auf automatisch stellen. Hilft das nicht, App neu koppeln lassen (ein anderer Admin oder Notfallzugang). |
+| Keine Mails | **System → Mailversand testen**. Schlägt das fehl: SMTP-Daten in `config.local.inc.php` prüfen (oder `install.php` ist gesperrt, also per FTP). Im Protokoll steht die Zahl fehlgeschlagener Zustellungen. |
+| Keine Erinnerungen | **System → Prüfung**, Zeile "Cron läuft". Steht dort "noch nie" oder eine alte Uhrzeit, den Cronjob beim Hoster prüfen. |
+| "Integritätsfehler" bei Benutzer oder Status | Datenbank wurde außerhalb der Anwendung verändert. Nicht reparieren, sondern Sicherheitsvorfall melden. Benutzer mit Fehler können sich nicht anmelden. |
+| Protokoll meldet "FEHLER" | Sicherheitsvorfall. DB-Dump sichern, mit Anker-Mails vergleichen, ISB informieren. |
+| Master-Key verloren | Gespeicherte Status, Protokolle und Einstellungen sind nicht mehr lesbar. Alte DB archivieren, `config.local.inc.php` entfernen, mit neuem Tabellen-Präfix neu einrichten (`install.php`). |
+
+## nginx
+
+`.htaccess` wirkt auf nginx nicht. Sperren Sie die Dateien per `location`:
+
+```nginx
+location ~ /\.(?!well-known) { deny all; }
+location ~ ^/(tests|docs|storage)/ { deny all; }
+location ~ ^/(config\.inc\.php|config\.local\.inc\.php|lib\.inc\.php|qr\.inc\.php|setup\.php|config\.json)$ { deny all; }
+location ~ \.(sqlite|db|log|eml|md)$ { deny all; }
+location /assets/ { expires 1y; add_header Cache-Control "public, immutable"; }
+```
+
+Noch besser: `config.json` und `storage/` per `app.json_path` / `app.storage_dir` außerhalb des Webroots ablegen.
+
+## Datenbank-Rechte härten (optional)
+
+MySQL kann Rechte, die auf die ganze Datenbank vergeben wurden, nicht für einzelne Tabellen wieder entziehen. Wer das
+Protokoll auch gegen die eigene Anwendung sperren will, vergibt die Rechte deshalb **je Tabelle**, nachdem die Tabellen
+angelegt sind:
+
+```sql
+REVOKE ALL PRIVILEGES ON statusbcm.* FROM 'statusbcm'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON statusbcm.sbcm_status        TO 'statusbcm'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON statusbcm.sbcm_mail_log      TO 'statusbcm'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON statusbcm.sbcm_login_attempt TO 'statusbcm'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON statusbcm.sbcm_totp_used     TO 'statusbcm'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON statusbcm.sbcm_kv            TO 'statusbcm'@'localhost';
+GRANT SELECT, INSERT, UPDATE, DELETE ON statusbcm.sbcm_view_count    TO 'statusbcm'@'localhost';
+GRANT SELECT, INSERT, UPDATE         ON statusbcm.sbcm_account       TO 'statusbcm'@'localhost';
+GRANT SELECT, INSERT                 ON statusbcm.sbcm_audit         TO 'statusbcm'@'localhost';
+GRANT LOCK TABLES                    ON statusbcm.*                  TO 'statusbcm'@'localhost'; -- für SELECT … FOR UPDATE (MySQL 8)
+```
+
+Danach kann selbst die Anwendung das Protokoll nicht mehr ändern, nur noch ergänzen. Vor einem Update mit neuen
+Tabellen müssen die Rechte vorübergehend erweitert werden (CREATE).
+
+## Tests
+
+```bash
+php tests/selftest.php      # Einheiten- und Integrationstest (SQLite)
+php tests/webtest.php       # kompletter Ablauf per HTTP mit php -S (benötigt die curl-Erweiterung)
+php tests/installtest.php   # Einrichtung im Browser, System-Seite, Notfallzugang (php -S, curl)
+# gegen MySQL/MariaDB (legt Tabellen mit Zufallspräfix an und entfernt sie wieder):
+SBCM_TEST_DSN="mysql:host=localhost;dbname=test;charset=utf8mb4" SBCM_TEST_USER=test SBCM_TEST_PASS=… php tests/selftest.php
+```

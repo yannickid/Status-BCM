@@ -20,6 +20,12 @@
 /* Honeypot (für Menschen unsichtbar) */
 .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
 
+/* QR-Code der Authenticator-Kopplung: weißer Rand bleibt auch im Dunkelmodus */
+.qr-code{max-width:100%;height:auto;background:#fff;border-radius:.25rem;image-rendering:pixelated}
+
+/* Lange Werte (Cron-URL) umbrechen */
+.break-all{word-break:break-all}
+
 /* Tabellen in Stufe 2 dürfen umbrechen statt zu scrollen */
 .table-wrap td,.table-wrap th{word-break:break-word}
 

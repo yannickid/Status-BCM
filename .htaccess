@@ -5,7 +5,7 @@ Options -Indexes
 DirectoryIndex index.php
 
 # Interne Dateien niemals ausliefern
-<FilesMatch "^(config\.inc\.php|config\.local\.inc\.php(\.tmp)?|lib\.inc\.php|setup\.php|config\.json|README\.md|\.gitignore)$">
+<FilesMatch "^(config\.inc\.php|config\.local\.inc\.php(\.tmp)?|lib\.inc\.php|qr\.inc\.php|setup\.php|config\.json|README\.md|\.gitignore)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>
@@ -15,7 +15,7 @@ DirectoryIndex index.php
     </IfModule>
 </FilesMatch>
 
-<FilesMatch "\.(sqlite|sqlite3|db|log|eml|lock|bak|orig|sh)$">
+<FilesMatch "\.(sqlite|sqlite3|db|log|eml|lock|bak|orig|sh|md)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>
@@ -28,7 +28,7 @@ DirectoryIndex index.php
 # Versteckte Dateien (.git, .env, ...) und interne Verzeichnisse
 <IfModule mod_alias.c>
     RedirectMatch 404 /\.(?!well-known)
-    RedirectMatch 404 /(tests|storage)(/|$)
+    RedirectMatch 404 /(tests|storage|docs)(/|$)
 </IfModule>
 
 # Wenig Traffic: CSS komprimieren und lange cachen (Dateien werden über ?v=... versioniert)

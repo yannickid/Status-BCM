@@ -7,6 +7,11 @@ define('SBCM', true);
 require __DIR__ . '/lib.inc.php';
 bootstrap();
 
+// Noch nicht eingerichtet: zum Einrichtungsassistenten
+if (stage1_hash() === '' && is_file(__DIR__ . '/install.php') && !is_installed()) {
+    redirect('install.php');
+}
+
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $err = null;
 

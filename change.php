@@ -6,6 +6,7 @@
 declare(strict_types=1);
 define('SBCM', true);
 require __DIR__ . '/lib.inc.php';
+require __DIR__ . '/qr.inc.php';
 bootstrap();
 
 if (!stage1_ok()) {
@@ -46,6 +47,52 @@ if ($method === 'POST') {
         redirect('change.php');
     } elseif (!$user) {
         $errors[] = 'Bitte erneut anmelden.';
+    } elseif ($act === 'setup' || $act === 'pw_change') {
+        // Ersteinrichtung (Einmalpasswort, abgelaufenes Passwort, fehlendes TOTP) bzw. Passwortwechsel
+        $needSetup = user_needs_setup($user);
+        $needPw = $act === 'pw_change' || $user['must_change'] || pw_state($user) === 'expired';
+        $needTotp = $act === 'setup' && $user['totp_secret'] === '';
+        $new = (string)($_POST['new_password'] ?? '');
+        if ($user['source'] !== 'db') {
+            $errors[] = 'Dieser Benutzer steht in config.local.inc.php und wird dort verwaltet.';
+        } elseif ($act === 'pw_change' && $needSetup) {
+            $errors[] = 'Bitte zuerst die Einrichtung abschließen.';
+        } elseif (($wait = throttle_locked('s2', $user['id'])) > 0) {
+            $errors[] = 'Zu viele Fehlversuche. Bitte in ca. ' . (int)ceil($wait / 60) . ' Minute(n) erneut versuchen.';
+        } else {
+            if ($needPw) {
+                $oldOk = password_verify((string)($_POST['old_password'] ?? ''), $user['hash']);
+                if (!$oldOk) {
+                    throttle_record('s2', $user['id'], false);
+                    fail_delay();
+                    $errors[] = 'Das bisherige Passwort ist falsch.';
+                }
+                if (!hash_equals($new, (string)($_POST['new_password2'] ?? ''))) {
+                    $errors[] = 'Die neuen Passwörter stimmen nicht überein.';
+                }
+                $errors = array_merge($errors, password_policy($new, $user['id'], $user['hash']));
+            }
+            $enroll = $_SESSION['enroll'] ?? null;
+            if ($needTotp && (!is_array($enroll) || $enroll['u'] !== $user['id']
+                || !totp_verify_user(['id' => $user['id'], 'totp_secret' => (string)$enroll['s']], (string)($_POST['totp'] ?? '')))) {
+                throttle_record('s2t', $user['id'], false);
+                $errors[] = 'Der Code aus der Authenticator-App ist ungültig. Bitte Uhrzeit des Smartphones prüfen und neuen Code eingeben.';
+            }
+            if (!$errors) {
+                if ($needPw) {
+                    account_action('set_pw', $user['id'], ['hash' => password_hash($new, PASSWORD_DEFAULT)], $user['id'], ['self' => true]);
+                }
+                if ($needTotp) {
+                    account_action('set_totp', $user['id'], ['totp_b32' => (string)$enroll['s']], $user['id'], ['self' => true, 'totp_confirmed' => true]);
+                    unset($_SESSION['enroll']);
+                }
+                flash('ok', $act === 'setup' ? 'Einrichtung abgeschlossen.' : 'Passwort geändert.');
+                redirect('change.php');
+            }
+        }
+        $user = stage2_user();
+    } elseif (user_needs_setup($user)) {
+        $errors[] = 'Bitte zuerst Passwort und Authenticator-App einrichten.';
     } elseif ($act === 'cancel') {
         unset($_SESSION['pending']);
         redirect('change.php');
@@ -135,6 +182,42 @@ echo '<div class="d-flex flex-wrap align-items-center gap-2 mb-3 small text-body
     . '<form method="post" action="change.php" class="m-0">' . csrf_field()
     . '<input type="hidden" name="action" value="logout2"><button class="btn btn-outline-secondary btn-sm" type="submit">Stufe 2 beenden</button></form></div>';
 
+/* Ersteinrichtung: Einmalpasswort ersetzen, abgelaufenes Passwort erneuern, Authenticator-App koppeln */
+if (user_needs_setup($user)) {
+    $needPw = $user['must_change'] || pw_state($user) === 'expired';
+    $needTotp = $user['totp_secret'] === '';
+    echo '<div class="card shadow-sm"><div class="card-body"><h2 class="h5">Zugang einrichten</h2>';
+    echo '<p class="small text-body-secondary">'
+        . ($user['must_change'] ? 'Sie haben ein Einmalpasswort erhalten. Bitte legen Sie ein eigenes Passwort fest. '
+            : (pw_state($user) === 'expired' ? 'Ihr Passwort ist abgelaufen. Bitte legen Sie ein neues fest. ' : ''))
+        . ($needTotp ? 'Koppeln Sie außerdem Ihre Authenticator-App (z. B. Microsoft/Google Authenticator, FreeOTP).' : '') . '</p>';
+    echo '<form method="post" action="change.php" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="setup">';
+    if ($needPw) {
+        echo '<label class="form-label" for="op">Bisheriges Passwort / Einmalpasswort</label><input class="form-control mb-3" id="op" type="password" name="old_password" autocomplete="current-password" required>';
+        echo '<label class="form-label" for="np">Neues Passwort <span class="small text-body-secondary">(mind. ' . max(12, (int)cfg('auth.password_min_length', 12))
+            . ' Zeichen, gern ein Satz)</span></label><input class="form-control mb-3" id="np" type="password" name="new_password" autocomplete="new-password" required>';
+        echo '<label class="form-label" for="np2">Neues Passwort wiederholen</label><input class="form-control mb-3" id="np2" type="password" name="new_password2" autocomplete="new-password" required>';
+    }
+    if ($needTotp) {
+        $en = $_SESSION['enroll'] ?? null;
+        if (!is_array($en) || $en['u'] !== $user['id']) {
+            $en = $_SESSION['enroll'] = ['u' => $user['id'], 's' => b32_encode(random_bytes(20))];
+        }
+        $uri = totp_uri($user['id'], $en['s']);
+        echo '<div class="alert alert-info"><strong>Authenticator-App koppeln:</strong> In der App (z. B. Microsoft/Google Authenticator, FreeOTP) '
+            . '"Konto hinzufügen" wählen und diesen QR-Code scannen.'
+            . '<div class="text-center my-2"><img class="qr-code" src="' . h(qr_svg_data_uri($uri)) . '" alt="QR-Code für die Authenticator-App" width="220" height="220"></div>'
+            . '<div class="small">Ohne Kamera (z. B. am selben Smartphone): Konto manuell anlegen, Typ "zeitbasiert", Schlüssel:</div>'
+            . '<div class="fs-5 font-monospace text-break my-1">' . h(trim(chunk_split($en['s'], 4, ' '))) . '</div>'
+            . '<div class="small text-break">oder diesen Link antippen: <a href="' . h($uri) . '">in Authenticator-App öffnen</a></div></div>';
+        echo '<label class="form-label" for="tc">Aktueller 6-stelliger Code aus der App</label>'
+            . '<input class="form-control form-control-lg mb-3" id="tc" type="text" name="totp" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required>';
+    }
+    echo '<div class="d-grid"><button class="btn btn-primary btn-lg" type="submit">Speichern</button></div></form></div></div>';
+    page_end();
+    exit;
+}
+
 /* Systemhinweise */
 $notes = [];
 if (!totp_secret_of($user)) {
@@ -148,6 +231,9 @@ if ((string)cfg('mail.transport') === 'log') {
 }
 if (!alarm_recipients()) {
     $notes[] = 'Keine ALARM-Empfänger konfiguriert.';
+}
+if (pw_state($user) === 'soon') {
+    $notes[] = 'Ihr Passwort läuft am ' . fmt_local($user['pw_valid_until']) . ' Uhr ab – bitte unter "Mein Zugang" ändern.';
 }
 foreach (bcm_lint($bcm) as $w) {
     $notes[] = 'Textprüfung: ' . $w;
@@ -256,6 +342,21 @@ echo '<label class="form-label" for="note">Interne Notiz / Anlass <span class="t
 echo '<input class="form-control mb-3" id="note" type="text" name="note" maxlength="200" value="' . h((string)$o('note')) . '">';
 echo '<div class="d-grid d-sm-block"><button class="btn btn-primary btn-lg" type="submit" name="action" value="preview">Vorschau</button></div></form></div></div>';
 
+/* Mein Zugang */
+echo '<details class="card shadow-sm mb-3"><summary class="card-header fw-semibold">Mein Zugang (Passwort ändern)</summary><div class="card-body">';
+echo '<p class="small mb-2">Passwort gesetzt: ' . h(fmt_local($user['pw_set_at'] ?? null)) . ' · gültig bis: '
+    . h(empty($user['pw_valid_until']) ? 'unbefristet' : fmt_local($user['pw_valid_until'])) . ' · Rolle: ' . h($user['role']) . '</p>';
+if ($user['source'] === 'db') {
+    echo '<form method="post" action="change.php" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="pw_change">';
+    echo '<label class="form-label" for="cp0">Bisheriges Passwort</label><input class="form-control mb-2" id="cp0" type="password" name="old_password" autocomplete="current-password" required>';
+    echo '<label class="form-label" for="cp1">Neues Passwort</label><input class="form-control mb-2" id="cp1" type="password" name="new_password" autocomplete="new-password" required>';
+    echo '<label class="form-label" for="cp2">Neues Passwort wiederholen</label><input class="form-control mb-3" id="cp2" type="password" name="new_password2" autocomplete="new-password" required>';
+    echo '<div class="d-grid d-sm-block"><button class="btn btn-outline-primary" type="submit">Passwort ändern</button></div></form>';
+} else {
+    echo '<p class="small text-body-secondary mb-0">Dieser Benutzer steht noch in config.local.inc.php und wird dort verwaltet (älterer Weg; Übernahme per <code>php setup.php migrate-users</code>).</p>';
+}
+echo '</div></details>';
+
 /* Nutzung */
 $st = login_stats(30);
 $hist = status_history(15);
@@ -283,7 +384,7 @@ foreach ($st['periods'] as $p) {
 }
 echo '</tr></tbody></table></div>';
 echo '<p class="small text-body-secondary">Stufe 1 zählt Anmeldungen (Sitzungen), nicht Personen – das Passwort ist gemeinsam. '
-    . 'Der Lesezähler im Statusverlauf zählt je Status einmal pro Sitzung, ohne IP oder Person. Tageswerte: <code>php setup.php stats</code>.</p>';
+    . 'Der Lesezähler im Statusverlauf zählt je Status einmal pro Sitzung, ohne IP oder Person. Tageswerte unter <a href="system.php">System</a> (Admins).</p>';
 echo '</div></details>';
 
 /* Meldungstexte */

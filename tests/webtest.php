@@ -46,66 +46,7 @@ for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $port); $i++) {
     usleep(100000);
 }
 
-$fails = 0;
-function ok(bool $c, string $m): void
-{
-    global $fails;
-    echo ($c ? '[ok]   ' : '[FAIL] ') . $m . "\n";
-    $fails += $c ? 0 : 1;
-}
-
-/** HTTP-Anfrage mit Cookie-Jar. Rückgabe: [Status, Header (lowercase => Wert), Body] */
-function req(string $method, string $url, array $post = [], string $jar = '', array $hdr = []): array
-{
-    $ch = curl_init($url);
-    $h = [];
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => false, CURLOPT_TIMEOUT => 20,
-        CURLOPT_HTTPHEADER => $hdr,
-        CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$h) {
-            $p = explode(':', $line, 2);
-            if (count($p) === 2) {
-                $h[strtolower(trim($p[0]))] = trim($p[1]);
-            }
-            return strlen($line);
-        },
-    ]);
-    if ($jar !== '') {
-        curl_setopt($ch, CURLOPT_COOKIEJAR, $jar);
-        curl_setopt($ch, CURLOPT_COOKIEFILE, $jar);
-    }
-    if ($method === 'POST') {
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($post));
-    }
-    $body = (string)curl_exec($ch);
-    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    curl_close($ch);
-    return [$code, $h, $body];
-}
-
-function csrf(string $html): string
-{
-    return preg_match('/name="_csrf" value="([0-9a-f]+)"/', $html, $m) ? $m[1] : '';
-}
-
-function totp_now(string $b32, int $offset = 0): string
-{
-    $alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    $bits = '';
-    foreach (str_split($b32) as $c) {
-        $bits .= str_pad(decbin(strpos($alpha, $c)), 5, '0', STR_PAD_LEFT);
-    }
-    $key = '';
-    foreach (str_split($bits, 8) as $b) {
-        if (strlen($b) === 8) {
-            $key .= chr(bindec($b));
-        }
-    }
-    $hm = hash_hmac('sha1', pack('J', intdiv(time(), 30) + $offset), $key, true);
-    $o = ord($hm[19]) & 0x0f;
-    return str_pad((string)((unpack('N', substr($hm, $o, 4))[1] & 0x7fffffff) % 1000000), 6, '0', STR_PAD_LEFT);
-}
+require __DIR__ . '/http.inc.php';
 
 try {
     $jar = $tmp . '/jar.txt';
@@ -187,7 +128,7 @@ try {
 
     [, , $b] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'commit', 'pending_id' => $pid, 'totp' => '000000'], $jar);
     ok(str_contains($b, 'Bestätigungscode ist ungültig'), 'Falscher TOTP-Code abgelehnt');
-    $code = totp_now($secret);
+    $code = fresh_code($secret);
     [$c] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'commit', 'pending_id' => $pid, 'totp' => $code], $jar);
     ok($c === 302, 'Mit gültigem TOTP verbindlich gesetzt');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
@@ -225,6 +166,55 @@ try {
     ok(str_contains($b2, 'Regelbetrieb'), 'Status beendet -> Regelbetrieb');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     ok(substr_count($b, 'Sicherheitsmaßnahme') >= 2 && str_contains($b, 'Status beendet'), 'Historie und Protokoll vollständig');
+    ok(str_contains($b, 'href="admin.php"'), 'Admin sieht den Menüpunkt Benutzer');
+
+    /* --- Benutzerverwaltung --- */
+    [$c, , $b] = req('GET', "$base/admin.php", [], $jar);
+    ok($c === 200 && str_contains($b, 'Benutzerverwaltung') && str_contains($b, 'Anna Test'), 'admin.php für Admin erreichbar');
+    $new = ['_csrf' => $t, 'action' => 'create', 'id' => 'carla', 'name' => 'Carla Redaktion', 'email' => 'carla@test.example', 'role' => 'editor'];
+    [, , $b] = req('POST', "$base/admin.php", $new + ['totp' => '000000'], $jar);
+    ok(str_contains($b, 'Bestätigungscode ist ungültig'), 'Benutzer anlegen ohne gültigen TOTP-Code abgelehnt');
+    [$c] = req('POST', "$base/admin.php", $new + ['totp' => fresh_code($secret)], $jar);
+    [, , $b] = req('GET', "$base/admin.php", [], $jar);
+    preg_match('/Einmalpasswort für carla: ([A-Za-z0-9-]{19})/', $b, $m);
+    $once = $m[1] ?? '';
+    ok($c === 302 && $once !== '' && str_contains($b, 'Carla Redaktion') && str_contains($b, 'Einmalpasswort offen'), 'Benutzer angelegt, Einmalpasswort einmalig angezeigt');
+    [, , $b] = req('GET', "$base/admin.php", [], $jar);
+    ok(!str_contains($b, $once), 'Einmalpasswort wird nicht erneut angezeigt');
+
+    $jar4 = $tmp . '/jar4.txt';
+    [, , $b] = req('GET', "$base/index.php", [], $jar4);
+    $t4 = csrf($b);
+    req('POST', "$base/index.php", ['_csrf' => $t4, 'action' => 'login', 'password' => 'zugang-1234'], $jar4);
+    [, , $b] = req('GET', "$base/change.php", [], $jar4);
+    $t4 = csrf($b);
+    [$c] = req('POST', "$base/change.php", ['_csrf' => $t4, 'action' => 'login2', 'user' => 'carla', 'password' => $once], $jar4);
+    [, , $b] = req('GET', "$base/change.php", [], $jar4);
+    ok($c === 302 && str_contains($b, 'Zugang einrichten') && !str_contains($b, 'Neuen Status setzen'), 'Erster Login: nur Einrichtung möglich');
+    ok(str_contains($b, 'class="qr-code" src="data:image/svg+xml;base64,'), 'QR-Code für die Authenticator-App wird angezeigt');
+    preg_match('/font-monospace text-break my-1">([A-Z2-7 ]+)</', $b, $m);
+    $carlaSecret = str_replace(' ', '', $m[1] ?? '');
+    [, , $b] = req('POST', "$base/change.php", ['_csrf' => $t4, 'action' => 'preview', 'mode' => 'end'], $jar4);
+    ok(str_contains($b, 'Bitte zuerst Passwort'), 'Status ändern vor der Einrichtung gesperrt');
+    [, , $b] = req('POST', "$base/change.php", ['_csrf' => $t4, 'action' => 'setup', 'old_password' => $once, 'new_password' => 'kurz',
+        'new_password2' => 'kurz', 'totp' => '000000'], $jar4);
+    ok(str_contains($b, 'mindestens 12 Zeichen') && str_contains($b, 'Authenticator-App ist ungültig'), 'Einrichtung prüft Passwortregeln und App-Code');
+    [$c] = req('POST', "$base/change.php", ['_csrf' => $t4, 'action' => 'setup', 'old_password' => $once, 'new_password' => 'Ein langer Satz als Passwort',
+        'new_password2' => 'Ein langer Satz als Passwort', 'totp' => fresh_code($carlaSecret)], $jar4);
+    [, , $b] = req('GET', "$base/change.php", [], $jar4);
+    ok($c === 302 && str_contains($b, 'Einrichtung abgeschlossen') && str_contains($b, 'Neuen Status setzen'), 'Einrichtung abgeschlossen, Status setzen freigeschaltet');
+    ok(!str_contains($b, 'href="admin.php"'), 'Redaktion sieht keinen Menüpunkt Benutzer');
+    [$c, , $b] = req('GET', "$base/admin.php", [], $jar4);
+    ok($c === 403 && str_contains($b, 'Admins vorbehalten'), 'admin.php für Redaktion gesperrt');
+    [$c, , $b] = req('GET', "$base/system.php", [], $jar4);
+    ok($c === 403 && str_contains($b, 'Admins vorbehalten'), 'system.php für Redaktion gesperrt');
+
+    [$c] = req('POST', "$base/admin.php", ['_csrf' => $t, 'action' => 'disable', 'id' => 'carla', 'totp' => fresh_code($secret)], $jar);
+    [, , $b] = req('GET', "$base/change.php", [], $jar4);
+    ok($c === 302 && str_contains($b, 'Anmeldung Stufe 2'), 'Deaktivierter Benutzer verliert sofort den Zugang');
+    [, , $b] = req('GET', "$base/change.php", [], $jar);
+    ok(str_contains($b, 'Benutzer angelegt') && str_contains($b, 'TOTP gekoppelt') && str_contains($b, 'Benutzer deaktiviert')
+        && str_contains($b, 'Integrität der Protokollkette: OK'), 'Benutzerverwaltung lückenlos im Protokoll');
 
     /* --- Alarm-Mail im Ausgang (BCC) --- */
     $alarm = '';
@@ -270,10 +260,10 @@ try {
     exec('rm -rf ' . escapeshellarg($tmp));
     if (str_starts_with((string)getenv('SBCM_TEST_DSN'), 'mysql:')) {
         $pdo = new PDO((string)getenv('SBCM_TEST_DSN'), (string)getenv('SBCM_TEST_USER'), (string)getenv('SBCM_TEST_PASS'));
-        foreach (['audit_no_upd', 'audit_no_del', 'status_no_del'] as $tr) {
+        foreach (['audit_no_upd', 'audit_no_del', 'status_no_del', 'account_no_del'] as $tr) {
             $pdo->exec("DROP TRIGGER IF EXISTS {$prefix}$tr");
         }
-        foreach (['status', 'audit', 'mail_log', 'login_attempt', 'totp_used', 'kv'] as $tb) {
+        foreach (['status', 'audit', 'mail_log', 'login_attempt', 'totp_used', 'kv', 'view_count', 'account'] as $tb) {
             $pdo->exec("DROP TABLE IF EXISTS {$prefix}$tb");
         }
     }

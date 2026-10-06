@@ -10,7 +10,7 @@ if (!defined('SBCM')) {
     exit;
 }
 
-const SBCM_VERSION = '1.0.0';
+const SBCM_VERSION = '1.2.0';
 define('SBCM_ZERO', str_repeat('0', 64));
 
 /* ====================================================================== */
@@ -315,7 +315,7 @@ function master_key(): string
     }
     $bin = base64_decode((string)cfg('security.master_key', ''), true);
     if ($bin === false || strlen($bin) !== 32) {
-        throw new RuntimeException('security.master_key fehlt/ungültig – "php setup.php init" ausführen');
+        throw new RuntimeException('security.master_key fehlt/ungültig – Einrichtung über install.php (oder "php setup.php init")');
     }
     return $k = $bin;
 }
@@ -409,7 +409,7 @@ function db(): PDO
     if (cfg('db.auto_install', true)) {
         try {
             // jüngste Tabelle prüfen – fehlt sie, werden fehlende Tabellen ergänzt (alles IF NOT EXISTS)
-            $pdo->query('SELECT 1 FROM ' . t('view_count') . ' LIMIT 1')->fetchAll();
+            $pdo->query('SELECT 1 FROM ' . t('account') . ' LIMIT 1')->fetchAll();
         } catch (Throwable $e) {
             install_schema($pdo);
         }
@@ -467,6 +467,7 @@ function install_schema(PDO $pdo): void
     $u = t('totp_used');
     $k = t('kv');
     $vc = t('view_count');
+    $ac = t('account');
 
     if ($drv === 'mysql') {
         $tail = ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
@@ -505,11 +506,19 @@ function install_schema(PDO $pdo): void
             "CREATE TABLE IF NOT EXISTS $vc (
                 status_id BIGINT NOT NULL, day CHAR(10) NOT NULL, n INT NOT NULL DEFAULT 0, PRIMARY KEY (status_id, day)
             )$tail",
+            "CREATE TABLE IF NOT EXISTS $ac (
+                id VARCHAR(32) NOT NULL, name VARCHAR(100) NOT NULL, email_enc TEXT NOT NULL, pw_hash VARCHAR(255) NOT NULL,
+                totp_enc TEXT NOT NULL, role VARCHAR(12) NOT NULL, active TINYINT NOT NULL DEFAULT 1, must_change TINYINT NOT NULL DEFAULT 1,
+                pw_set_at CHAR(19) NULL, pw_valid_until CHAR(19) NULL, pw_reminder_at CHAR(19) NULL,
+                created_at CHAR(19) NOT NULL, created_by VARCHAR(64) NOT NULL, updated_at CHAR(19) NOT NULL, row_mac CHAR(64) NOT NULL,
+                PRIMARY KEY (id)
+            )$tail",
         ];
         $triggers = [
             "CREATE TRIGGER {$a}_no_upd BEFORE UPDATE ON $a FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit is append-only'",
             "CREATE TRIGGER {$a}_no_del BEFORE DELETE ON $a FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit is append-only'",
             "CREATE TRIGGER {$s}_no_del BEFORE DELETE ON $s FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'status history is append-only'",
+            "CREATE TRIGGER {$ac}_no_del BEFORE DELETE ON $ac FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'accounts are deactivated, not deleted'",
         ];
     } else {
         $sql = [
@@ -541,11 +550,18 @@ function install_schema(PDO $pdo): void
             "CREATE TABLE IF NOT EXISTS $u (user TEXT NOT NULL, step INTEGER NOT NULL, PRIMARY KEY (user, step))",
             "CREATE TABLE IF NOT EXISTS $k (k TEXT NOT NULL PRIMARY KEY, v TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS $vc (status_id INTEGER NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (status_id, day))",
+            "CREATE TABLE IF NOT EXISTS $ac (
+                id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, email_enc TEXT NOT NULL, pw_hash TEXT NOT NULL, totp_enc TEXT NOT NULL,
+                role TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, must_change INTEGER NOT NULL DEFAULT 1,
+                pw_set_at TEXT NULL, pw_valid_until TEXT NULL, pw_reminder_at TEXT NULL,
+                created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT NOT NULL, row_mac TEXT NOT NULL
+            )",
         ];
         $triggers = [
             "CREATE TRIGGER {$a}_no_upd BEFORE UPDATE ON $a BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END",
             "CREATE TRIGGER {$a}_no_del BEFORE DELETE ON $a BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END",
             "CREATE TRIGGER {$s}_no_del BEFORE DELETE ON $s BEGIN SELECT RAISE(ABORT, 'status history is append-only'); END",
+            "CREATE TRIGGER {$ac}_no_del BEFORE DELETE ON $ac BEGIN SELECT RAISE(ABORT, 'accounts are deactivated, not deleted'); END",
         ];
     }
     foreach ($sql as $q) {
@@ -574,6 +590,204 @@ function kv_set(string $k, string $v): void
     $q->execute([$k]);
     $q = db()->prepare('INSERT INTO ' . t('kv') . ' (k, v) VALUES (?, ?)');
     $q->execute([$k, $v]);
+}
+
+/* ====================================================================== */
+/* Im Browser gepflegte Einstellungen                                     */
+/* ====================================================================== */
+
+/*
+ * Werte, die Admins ohne Kommandozeile ändern (Zugangspasswort Stufe 1, ALARM-Empfänger, cc_default_mail1), liegen
+ * in der Tabelle kv, verschlüsselt mit AES-256-GCM und dem Schlüsselnamen als Kontext. Wer nur die Datenbank
+ * kontrolliert, kann sie weder lesen noch fälschen oder zwischen Schlüsseln vertauschen. Werte aus
+ * config.local.inc.php gelten weiter als Rückfall (Empfänger: zusätzlich).
+ */
+function setting_get(string $k, bool $reload = false)
+{
+    static $cache = [];
+    if ($reload) {
+        $cache = [];
+        return null;
+    }
+    if (array_key_exists($k, $cache)) {
+        return $cache[$k];
+    }
+    try {
+        $raw = kv_get('set:' . $k);
+    } catch (Throwable $e) {
+        return null; // Datenbank (noch) nicht erreichbar: Rückfall auf die Konfigurationsdatei
+    }
+    if ($raw === null) {
+        return $cache[$k] = null;
+    }
+    try {
+        $v = json_decode(dec($raw, 'setting:' . $k, 'settings'), true, 16, JSON_THROW_ON_ERROR);
+    } catch (Throwable $e) {
+        error_log('Status-BCM: Einstellung ' . $k . ' nicht lesbar (Integritätsfehler?)');
+        $v = null;
+    }
+    return $cache[$k] = $v;
+}
+
+function setting_set(string $k, $v): void
+{
+    kv_set('set:' . $k, enc(json_enc($v), 'setting:' . $k, 'settings'));
+    setting_get($k, true);
+}
+
+/** Einstellung, deren Eintrag in kv vorhanden, aber nicht entschlüsselbar ist (Manipulation, falscher Master-Key). */
+function setting_broken(string $k): bool
+{
+    try {
+        $raw = kv_get('set:' . $k);
+        if ($raw === null) {
+            return false;
+        }
+        dec($raw, 'setting:' . $k, 'settings');
+        return false;
+    } catch (Throwable $e) {
+        return true;
+    }
+}
+
+function stage1_hash(): string
+{
+    $s = setting_get('stage1');
+    return is_array($s) && !empty($s['hash']) ? (string)$s['hash'] : (string)cfg('auth.stage1_hash', '');
+}
+
+function stage1_set_at(): string
+{
+    $s = setting_get('stage1');
+    return is_array($s) && !empty($s['hash']) ? (string)($s['set_at'] ?? '') : (string)cfg('auth.stage1_set_at', '');
+}
+
+/** Zugangspasswort Stufe 1 setzen (Browser oder CLI). Rückgabe: Fehlerliste. */
+function stage1_change(string $pw, string $pw2, string $actor, array $how = []): array
+{
+    $e = [];
+    if (mb_strlen($pw) < 10 || strlen($pw) > 1000) {
+        $e[] = 'Das Zugangspasswort muss mindestens 10 Zeichen lang sein.';
+    }
+    if (!hash_equals($pw, $pw2)) {
+        $e[] = 'Die Eingaben stimmen nicht überein.';
+    }
+    if (!$e && password_verify($pw, stage1_hash())) {
+        $e[] = 'Das neue Zugangspasswort muss sich vom bisherigen unterscheiden.';
+    }
+    if ($e) {
+        return $e;
+    }
+    tx(function () use ($pw, $actor, $how) {
+        setting_set('stage1', ['hash' => password_hash($pw, PASSWORD_DEFAULT), 'set_at' => now_utc()]);
+        kv_set('stage1_reminder_ts', '0');
+        audit('setting.stage1', 'stage1', ['how' => $how], $actor, str_starts_with($actor, 'system:') ? 0 : 2);
+    });
+    return [];
+}
+
+/** ALARM-Empfänger aus dem Browser (Liste im Klartext, als Ganzes verschlüsselt gespeichert). */
+function recipients_web(): array
+{
+    $v = setting_get('recipients');
+    return is_array($v) ? array_values(array_filter(array_map('strval', $v), fn($e) => filter_var($e, FILTER_VALIDATE_EMAIL))) : [];
+}
+
+/** Empfänger hinzufügen (mehrere durch Zeilenumbruch, Komma oder Semikolon getrennt). Rückgabe: [neu, Fehler] */
+function recipients_add(string $text, string $actor, array $how = []): array
+{
+    $new = [];
+    $bad = [];
+    foreach (preg_split('/[\s,;]+/', strtolower($text), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $m) {
+        filter_var($m, FILTER_VALIDATE_EMAIL) ? $new[$m] = $m : $bad[] = $m;
+    }
+    if ($bad || !$new) {
+        return [0, $bad ? 'Ungültige Adresse(n): ' . implode(', ', array_map('mask_email', $bad)) : 'Bitte mindestens eine Adresse angeben.'];
+    }
+    return tx(function () use ($new, $actor, $how) {
+        $cur = recipients_web();
+        $add = array_values(array_diff(array_values($new), $cur, alarm_recipients()));
+        if ($add) {
+            setting_set('recipients', array_merge($cur, $add));
+            audit('setting.recipient_add', 'recipients', ['count' => count($add), 'masked' => array_map('mask_email', $add), 'how' => $how],
+                $actor, str_starts_with($actor, 'system:') ? 0 : 2);
+        }
+        return [count($add), null];
+    });
+}
+
+function recipients_remove(int $index, string $actor, array $how = []): bool
+{
+    return tx(function () use ($index, $actor, $how) {
+        $cur = recipients_web();
+        if (!isset($cur[$index])) {
+            return false;
+        }
+        $gone = $cur[$index];
+        array_splice($cur, $index, 1);
+        setting_set('recipients', $cur);
+        audit('setting.recipient_remove', 'recipients', ['masked' => [mask_email($gone)], 'how' => $how], $actor, str_starts_with($actor, 'system:') ? 0 : 2);
+        return true;
+    });
+}
+
+function cc1_change(string $mail, string $actor, array $how = []): ?string
+{
+    $mail = strtolower(trim($mail));
+    if (!filter_var($mail, FILTER_VALIDATE_EMAIL)) {
+        return 'Bitte eine gültige E-Mail-Adresse angeben.';
+    }
+    tx(function () use ($mail, $actor, $how) {
+        $before = cc_default_mail1();
+        setting_set('cc1', $mail);
+        audit('setting.cc1', 'cc1', ['masked' => [mask_email($mail)], 'before' => $before !== '' ? mask_email($before) : '–', 'how' => $how],
+            $actor, str_starts_with($actor, 'system:') ? 0 : 2);
+    });
+    return null;
+}
+
+/* ====================================================================== */
+/* config.local.inc.php (Installer, CLI)                                  */
+/* ====================================================================== */
+
+function local_config_path(): string
+{
+    return getenv('SBCM_LOCAL_CONFIG') ?: (__DIR__ . '/config.local.inc.php');
+}
+
+function local_config_load(): array
+{
+    $p = local_config_path();
+    if (!is_file($p)) {
+        return [];
+    }
+    $a = require $p;
+    return is_array($a) ? $a : [];
+}
+
+function local_config_code(array $a): string
+{
+    return "<?php\n// Status-BCM – lokale Konfiguration mit Geheimnissen (Master-Key!). NICHT committen, separat sichern, Rechte 0600.\n"
+        . "if (!defined('SBCM')) { http_response_code(403); exit; }\nreturn " . var_export($a, true) . ";\n";
+}
+
+/** Schreibt config.local.inc.php atomar. false = Verzeichnis/Datei nicht beschreibbar (dann Download anbieten). */
+function local_config_write(array $a): bool
+{
+    $p = local_config_path();
+    $tmp = $p . '.tmp';
+    if (@file_put_contents($tmp, local_config_code($a), LOCK_EX) === false) {
+        return false;
+    }
+    @chmod($tmp, 0600);
+    if (!@rename($tmp, $p)) {
+        @unlink($tmp);
+        return false;
+    }
+    if (function_exists('opcache_invalidate')) {
+        @opcache_invalidate($p, true);
+    }
+    return true;
 }
 
 /* ====================================================================== */
@@ -727,27 +941,276 @@ function stage1_ok(): bool
     return !empty($_SESSION['s1']);
 }
 
-function users(): array
+/**
+ * Benutzer Stufe 2. Quellen:
+ *  - Datenbank (Tabelle account; Verwaltung über admin.php bzw. `php setup.php add-user`). Jede Zeile trägt einen
+ *    MAC mit dem Master-Key: Wer nur die Datenbank kontrolliert, kann keine Benutzer einschleusen oder Rollen ändern.
+ *  - Altbestand aus config.local.inc.php (auth.users): immer Rolle admin, nur per CLI änderbar
+ *    (`php setup.php migrate-users` überführt ihn in die Datenbank).
+ * $all = true: auch deaktivierte Benutzer und Zeilen mit Integritätsfehler (nur für die Anzeige in admin.php).
+ */
+function users(bool $all = false, bool $reload = false): array
 {
-    $out = [];
-    foreach ((array)cfg('auth.users', []) as $id => $u) {
-        $id = strtolower((string)$id);
-        if (!preg_match('/^[a-z0-9_-]{2,32}$/', $id) || !is_array($u)) {
-            continue;
+    static $cache = null;
+    if ($cache === null || $reload) {
+        $cache = [];
+        foreach ((array)cfg('auth.users', []) as $id => $u) {
+            $id = strtolower((string)$id);
+            if (!preg_match('/^[a-z0-9_-]{2,32}$/', $id) || !is_array($u)) {
+                continue;
+            }
+            try {
+                $email = cfg_secret((string)($u['email'] ?? ''));
+            } catch (Throwable $e) {
+                $email = '';
+            }
+            $cache[$id] = [
+                'name' => (string)($u['name'] ?? $id), 'email' => $email, 'hash' => (string)($u['hash'] ?? ''),
+                'totp_secret' => (string)($u['totp_secret'] ?? ''), 'role' => 'admin', 'active' => true,
+                'must_change' => false, 'pw_set_at' => ((string)($u['pw_set_at'] ?? '')) ?: null, 'pw_valid_until' => null,
+                'pw_reminder_at' => null, 'source' => 'config', 'mac_ok' => true,
+            ];
         }
-        try {
-            $email = cfg_secret((string)($u['email'] ?? ''));
-        } catch (Throwable $e) {
-            $email = '';
+        foreach (db()->query('SELECT * FROM ' . t('account') . ' ORDER BY id') as $r) {
+            $id = (string)$r['id'];
+            if (isset($cache[$id])) {
+                continue; // Konfiguration hat Vorrang (Altbestand bis zur Migration)
+            }
+            $macOk = hash_equals(account_row_mac($r), (string)$r['row_mac']);
+            try {
+                $email = (string)$r['email_enc'] !== '' ? dec((string)$r['email_enc'], 'account.email:' . $id) : '';
+            } catch (Throwable $e) {
+                $email = '';
+                $macOk = false;
+            }
+            if (!$macOk) {
+                error_log('Status-BCM: Benutzer ' . $id . ': Integritätsfehler');
+            }
+            $cache[$id] = [
+                'name' => (string)$r['name'], 'email' => $email, 'hash' => (string)$r['pw_hash'],
+                'totp_secret' => (string)$r['totp_enc'], 'role' => (string)$r['role'], 'active' => (bool)(int)$r['active'],
+                'must_change' => (bool)(int)$r['must_change'], 'pw_set_at' => $r['pw_set_at'], 'pw_valid_until' => $r['pw_valid_until'],
+                'pw_reminder_at' => $r['pw_reminder_at'], 'source' => 'db', 'mac_ok' => $macOk,
+            ];
         }
-        $out[$id] = [
-            'name'        => (string)($u['name'] ?? $id),
-            'email'       => $email,
-            'hash'        => (string)($u['hash'] ?? ''),
-            'totp_secret' => (string)($u['totp_secret'] ?? ''),
-        ];
     }
-    return $out;
+    return $all ? $cache : array_filter($cache, fn($u) => $u['active'] && $u['mac_ok']);
+}
+
+function account_row_mac(array $r): string
+{
+    return mac('account', implode('|', [$r['id'], $r['name'], $r['email_enc'], $r['pw_hash'], $r['totp_enc'], $r['role'],
+        (int)$r['active'], (int)$r['must_change'], $r['pw_set_at'] ?? '', $r['pw_valid_until'] ?? '']));
+}
+
+function account_get_row(string $id): ?array
+{
+    $q = db()->prepare('SELECT * FROM ' . t('account') . ' WHERE id = ?');
+    $q->execute([$id]);
+    $r = $q->fetch();
+    return $r ?: null;
+}
+
+/** Gültigkeit eines neu gesetzten Passworts (UTC) oder null (keine Ablaufpflicht). */
+function pw_valid_until_from(int $ts): ?string
+{
+    $days = (int)cfg('auth.password_max_age_days', 0);
+    return $days > 0 ? gmdate('Y-m-d H:i:s', $ts + $days * 86400) : null;
+}
+
+/** ok | soon | expired | none */
+function pw_state(array $u, ?int $now = null): string
+{
+    if (empty($u['pw_valid_until'])) {
+        return 'none';
+    }
+    $now ??= time();
+    $vu = utc_ts((string)$u['pw_valid_until']);
+    if ($now >= $vu) {
+        return 'expired';
+    }
+    return $now >= $vu - (int)cfg('auth.password_remind_days', 14) * 86400 ? 'soon' : 'ok';
+}
+
+/** Muss der Benutzer vor jeder Änderung erst Passwort/TOTP einrichten? */
+function user_needs_setup(array $u): bool
+{
+    return $u['source'] === 'db' && ($u['must_change'] || pw_state($u) === 'expired' || $u['totp_secret'] === '');
+}
+
+/** Passwortregeln (BSI ORP.4: Länge vor Komplexität). Rückgabe: Fehlerliste. */
+function password_policy(string $pw, string $userId, ?string $oldHash = null): array
+{
+    $e = [];
+    $min = max(12, (int)cfg('auth.password_min_length', 12));
+    if (mb_strlen($pw) < $min) {
+        $e[] = "Das Passwort muss mindestens $min Zeichen lang sein.";
+    }
+    if (strlen($pw) > 1000) {
+        $e[] = 'Das Passwort ist zu lang.';
+    }
+    if ($userId !== '' && mb_stripos($pw, $userId) !== false) {
+        $e[] = 'Das Passwort darf den Benutzernamen nicht enthalten.';
+    }
+    if (preg_match('/^(.)\1+$/u', $pw) || count(array_unique(preg_split('//u', $pw, -1, PREG_SPLIT_NO_EMPTY) ?: [])) < 6) {
+        $e[] = 'Das Passwort ist zu einfach (zu wenige verschiedene Zeichen).';
+    }
+    if ($oldHash !== null && $oldHash !== '' && password_verify($pw, $oldHash)) {
+        $e[] = 'Das neue Passwort muss sich vom bisherigen unterscheiden.';
+    }
+    return $e;
+}
+
+function random_password(): string
+{
+    // 16 Zeichen ohne verwechselbare Zeichen (0/O, 1/l/I)
+    $alpha = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    $out = '';
+    for ($i = 0; $i < 16; $i++) {
+        $out .= $alpha[random_int(0, strlen($alpha) - 1)];
+    }
+    return implode('-', str_split($out, 4));
+}
+
+/** Schreibt eine Benutzerzeile (Insert oder Update) inkl. MAC. $fields im Klartext: name, email, hash, totp_b32, role, active, must_change, pw_set_at, pw_valid_until */
+function account_write(string $id, array $fields, bool $insert, string $actor): void
+{
+    $cur = $insert ? null : account_get_row($id);
+    if (!$insert && !$cur) {
+        throw new InvalidArgumentException('Benutzer unbekannt');
+    }
+    if (!$insert && !hash_equals(account_row_mac($cur), (string)$cur['row_mac'])) {
+        throw new RuntimeException('Benutzerzeile hat einen Integritätsfehler – Änderung abgelehnt');
+    }
+    $r = $cur ?? ['id' => $id, 'name' => '', 'email_enc' => '', 'pw_hash' => '', 'totp_enc' => '', 'role' => 'editor',
+        'active' => 1, 'must_change' => 1, 'pw_set_at' => null, 'pw_valid_until' => null, 'pw_reminder_at' => null];
+    foreach (['name', 'role', 'pw_set_at', 'pw_valid_until'] as $f) {
+        if (array_key_exists($f, $fields)) {
+            $r[$f] = $fields[$f];
+        }
+    }
+    foreach (['active', 'must_change'] as $f) {
+        if (array_key_exists($f, $fields)) {
+            $r[$f] = $fields[$f] ? 1 : 0;
+        }
+    }
+    if (array_key_exists('email', $fields)) {
+        $r['email_enc'] = $fields['email'] === '' ? '' : enc(strtolower((string)$fields['email']), 'account.email:' . $id);
+    }
+    if (array_key_exists('hash', $fields)) {
+        $r['pw_hash'] = (string)$fields['hash'];
+        $r['pw_reminder_at'] = null;
+    }
+    if (array_key_exists('totp_b32', $fields)) {
+        $r['totp_enc'] = $fields['totp_b32'] === '' ? '' : cfg_encrypt((string)$fields['totp_b32']);
+    }
+    if (!in_array($r['role'], ['admin', 'editor'], true)) {
+        throw new InvalidArgumentException('Rolle ungültig');
+    }
+    $r['row_mac'] = account_row_mac($r);
+    $now = now_utc();
+    if ($insert) {
+        db()->prepare('INSERT INTO ' . t('account') . ' (id, name, email_enc, pw_hash, totp_enc, role, active, must_change, pw_set_at,'
+            . ' pw_valid_until, pw_reminder_at, created_at, created_by, updated_at, row_mac) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+            ->execute([$id, $r['name'], $r['email_enc'], $r['pw_hash'], $r['totp_enc'], $r['role'], $r['active'], $r['must_change'],
+                $r['pw_set_at'], $r['pw_valid_until'], null, $now, $actor, $now, $r['row_mac']]);
+    } else {
+        db()->prepare('UPDATE ' . t('account') . ' SET name = ?, email_enc = ?, pw_hash = ?, totp_enc = ?, role = ?, active = ?, must_change = ?,'
+            . ' pw_set_at = ?, pw_valid_until = ?, pw_reminder_at = ?, updated_at = ?, row_mac = ? WHERE id = ?')
+            ->execute([$r['name'], $r['email_enc'], $r['pw_hash'], $r['totp_enc'], $r['role'], $r['active'], $r['must_change'],
+                $r['pw_set_at'], $r['pw_valid_until'], $r['pw_reminder_at'], $now, $r['row_mac'], $id]);
+    }
+    users(false, true);
+}
+
+/**
+ * Benutzerverwaltung (Aktion + Audit in einer Transaktion). Rückgabe: ggf. Einmalpasswort.
+ * Aktionen: create (name, email, role), reset_pw, reset_totp, disable, enable, role (role), set_pw (hash), set_totp (totp_b32)
+ */
+function account_action(string $action, string $id, array $in, string $actor, array $how = []): ?string
+{
+    $id = strtolower(trim($id));
+    if (!preg_match('/^[a-z0-9_-]{2,32}$/', $id)) {
+        throw new InvalidArgumentException('Benutzerkennung ungültig (2–32 Zeichen a–z, 0–9, _ und -)');
+    }
+    $level = str_starts_with($actor, 'system:') ? 0 : 2;
+    try {
+        return tx(fn() => account_action_tx($action, $id, $in, $actor, $how, $level));
+    } finally {
+        users(false, true); // Cache auch nach einem Rollback neu laden
+    }
+}
+
+function account_action_tx(string $action, string $id, array $in, string $actor, array $how, int $level): ?string
+{
+    $before = users(true, true)[$id] ?? null;
+    if ($action !== 'create' && $before && $before['source'] === 'config') {
+        throw new InvalidArgumentException('Dieser Benutzer steht in config.local.inc.php und wird per CLI verwaltet (php setup.php migrate-users).');
+    }
+    $once = null;
+    $now = time();
+    $details = ['user' => $id];
+    switch ($action) {
+        case 'create':
+            if ($before || account_get_row($id)) {
+                throw new InvalidArgumentException('Diese Benutzerkennung ist bereits vergeben.');
+            }
+            $name = trim((string)($in['name'] ?? ''));
+            $email = strtolower(trim((string)($in['email'] ?? '')));
+            if ($name === '' || mb_strlen($name) > 100 || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                throw new InvalidArgumentException('Name und gültige E-Mail-Adresse angeben.');
+            }
+            $once = (string)($in['password'] ?? '') ?: random_password();
+            account_write($id, ['name' => $name, 'email' => $email, 'role' => (string)($in['role'] ?? 'editor'),
+                'hash' => password_hash($once, PASSWORD_DEFAULT), 'totp_b32' => (string)($in['totp_b32'] ?? ''),
+                'must_change' => !isset($in['password']), 'pw_set_at' => gmdate('Y-m-d H:i:s', $now),
+                'pw_valid_until' => pw_valid_until_from($now), 'active' => true], true, $actor);
+            $details += ['role' => (string)($in['role'] ?? 'editor'), 'email' => mask_email($email)];
+            if (isset($in['password'])) {
+                $once = null; // selbst gewähltes Passwort (CLI) wird nicht zurückgegeben
+            }
+            break;
+        case 'reset_pw':
+            $once = random_password();
+            account_write($id, ['hash' => password_hash($once, PASSWORD_DEFAULT), 'must_change' => true,
+                'pw_set_at' => gmdate('Y-m-d H:i:s', $now), 'pw_valid_until' => pw_valid_until_from($now)], false, $actor);
+            break;
+        case 'set_pw':
+            account_write($id, ['hash' => (string)$in['hash'], 'must_change' => false,
+                'pw_set_at' => gmdate('Y-m-d H:i:s', $now), 'pw_valid_until' => pw_valid_until_from($now)], false, $actor);
+            break;
+        case 'reset_totp':
+            account_write($id, ['totp_b32' => ''], false, $actor);
+            break;
+        case 'set_totp':
+            account_write($id, ['totp_b32' => (string)$in['totp_b32']], false, $actor);
+            break;
+        case 'disable':
+        case 'enable':
+            if ($action === 'disable' && $id === $actor) {
+                throw new InvalidArgumentException('Sie können sich nicht selbst deaktivieren.');
+            }
+            account_write($id, ['active' => $action === 'enable'], false, $actor);
+            break;
+        case 'role':
+            $role = (string)($in['role'] ?? '');
+            if ($id === $actor && $role !== 'admin') {
+                throw new InvalidArgumentException('Sie können sich die Admin-Rolle nicht selbst entziehen.');
+            }
+            account_write($id, ['role' => $role], false, $actor);
+            $details += ['role_before' => $before['role'] ?? null, 'role' => $role];
+            break;
+        default:
+            throw new InvalidArgumentException('Unbekannte Aktion');
+    }
+    if (in_array($action, ['disable', 'role'], true)) {
+        $admins = array_filter(users(), fn($u) => $u['role'] === 'admin');
+        if (!$admins) {
+            throw new InvalidArgumentException('Es muss mindestens ein aktiver Admin bleiben.');
+        }
+    }
+    audit('user.' . $action, 'user:' . $id, $details + ['how' => $how], $actor, $level);
+    return $once;
 }
 
 function stage2_user(): ?array
@@ -791,7 +1254,7 @@ function logout_all(): void
 
 function verify_stage1(string $pw): bool
 {
-    $hash = (string)cfg('auth.stage1_hash', '');
+    $hash = stage1_hash();
     if ($hash === '' || strlen($pw) > 1000) {
         password_verify('x', password_hash('dummy', PASSWORD_DEFAULT));
         return false;
@@ -1011,7 +1474,14 @@ function audit_describe(string $action, array $d): string
         'status.end' => 'Status beendet', 'status.auto_end' => 'Status automatisch zurückgesetzt',
         'mail.alarm' => 'ALARM-Mail versendet', 'mail.reminder' => 'Erinnerung versendet',
         'mail.anchor' => 'Audit-Anker versendet', 'mail.autorevert' => 'Hinweis Rücksetzung versendet',
-        'logout' => 'Abmeldung',
+        'mail.pw_reminder' => 'Passwort-Erinnerung versendet', 'logout' => 'Abmeldung',
+        'user.create' => 'Benutzer angelegt', 'user.reset_pw' => 'Passwort zurückgesetzt (Einmalpasswort)',
+        'user.set_pw' => 'Passwort geändert', 'user.reset_totp' => 'TOTP zurückgesetzt', 'user.set_totp' => 'TOTP gekoppelt',
+        'user.disable' => 'Benutzer deaktiviert', 'user.enable' => 'Benutzer aktiviert', 'user.role' => 'Rolle geändert',
+        'system.install' => 'Einrichtung abgeschlossen (install.php)', 'system.cron_manual' => 'Cron manuell ausgeführt',
+        'setting.stage1' => 'Zugangspasswort Stufe 1 geändert', 'setting.cc1' => 'Kopie-Adresse (cc_default_mail1) geändert',
+        'setting.recipient_add' => 'ALARM-Empfänger hinzugefügt', 'setting.recipient_remove' => 'ALARM-Empfänger entfernt',
+        'mail.test' => 'Testmail versendet',
     ];
     $s = $labels[$action] ?? $action;
     $parts = [];
@@ -1025,13 +1495,22 @@ function audit_describe(string $action, array $d): string
         }
         $parts[] = 'ALARM-Mail: ' . (!empty($d['after']['alarm_mail']) ? 'ja' : 'nein');
     }
+    if (!empty($d['how']['emergency'])) {
+        $parts[] = 'Notfallzugang (storage/notfall.txt)';
+    }
     if (isset($d['how']['totp'])) {
         $parts[] = 'TOTP: ' . ($d['how']['totp'] ? 'ja' : 'nein');
     }
-    foreach (['recipients', 'ok', 'failed', 'status_id'] as $f) {
+    if (isset($d['role'])) {
+        $parts[] = 'Rolle: ' . (isset($d['role_before']) ? $d['role_before'] . ' → ' : '') . $d['role'];
+    }
+    foreach (['recipients', 'ok', 'failed', 'status_id', 'state', 'count'] as $f) {
         if (isset($d[$f]) && is_scalar($d[$f])) {
             $parts[] = "$f: " . $d[$f];
         }
+    }
+    if (!empty($d['masked']) && is_array($d['masked'])) {
+        $parts[] = 'Adresse: ' . implode(', ', array_map('strval', $d['masked']));
     }
     if (!empty($d['note'])) {
         $parts[] = 'Notiz: ' . $d['note'];
@@ -1354,9 +1833,13 @@ function login_stats(int $days = 30, ?int $nowTs = null): array
 /* E-Mail (eigener SMTP-Client, keine Abhängigkeiten)                     */
 /* ====================================================================== */
 
+/** ALARM-Empfänger: aus config.local.inc.php (CLI) und aus dem Browser (System-Seite), ohne Doppelte. */
 function alarm_recipients(): array
 {
     $out = [];
+    foreach (recipients_web() as $e) {
+        $out[$e] = $e;
+    }
     foreach ((array)cfg('mail.recipients', []) as $r) {
         try {
             $e = strtolower(trim(cfg_secret((string)$r)));
@@ -1374,6 +1857,10 @@ function alarm_recipients(): array
 /** cc_default_mail1 – darf wie die Empfänger als "enc:..." hinterlegt sein. */
 function cc_default_mail1(): string
 {
+    $web = setting_get('cc1');
+    if (is_string($web) && filter_var($web, FILTER_VALIDATE_EMAIL)) {
+        return $web;
+    }
     try {
         $e = strtolower(trim(cfg_secret((string)cfg('mail.cc_default_mail1', ''))));
     } catch (Throwable $ex) {
@@ -1771,6 +2258,11 @@ function run_cron(?int $nowTs = null): array
         $log[] = "Erinnerung für Status #{$r['id']} ($label): {$sum['ok']}/{$sum['total']} zugestellt";
     }
 
+    kv_set('cron_last', (string)$now);
+
+    // Passwort-Gültigkeit (Stufe 2 je Benutzer, Stufe 1 gemeinsam): Erinnerung vor/nach Ablauf
+    $log = array_merge($log, password_reminders($now));
+
     // Aufräumen
     db()->prepare('DELETE FROM ' . t('login_attempt') . ' WHERE ts < ?')->execute([$now - 2 * 86400]);
     db()->prepare('DELETE FROM ' . t('totp_used') . ' WHERE step < ?')->execute([intdiv($now, 30) - 120]);
@@ -1793,6 +2285,174 @@ function run_cron(?int $nowTs = null): array
         }
     }
     return $log;
+}
+
+/** Erinnerungsmails zur Passwort-Gültigkeit. Wiederholung alle auth.password_reminder_repeat_days Tage. */
+function password_reminders(int $now): array
+{
+    $log = [];
+    $tpl = bcm()['mail_templates']['password'] ?? null;
+    if (!$tpl) {
+        return $log;
+    }
+    $repeat = max(1, (int)cfg('auth.password_reminder_repeat_days', 7)) * 86400;
+    $cc1 = cc_default_mail1();
+    $url = rtrim((string)cfg('app.base_url'), '/') . '/change.php';
+    foreach (users() as $id => $u) {
+        $state = pw_state($u, $now);
+        if ($u['source'] !== 'db' || !in_array($state, ['soon', 'expired'], true)) {
+            continue;
+        }
+        if (!empty($u['pw_reminder_at']) && $now - utc_ts((string)$u['pw_reminder_at']) < $repeat) {
+            continue;
+        }
+        $vars = ['name' => $u['name'], 'what' => 'Ihr persönliches Passwort (Benutzer ' . $id . ')',
+            'phrase' => $state === 'expired' ? 'ist seit ' . fmt_local($u['pw_valid_until']) . ' Uhr abgelaufen. Bei der nächsten Anmeldung muss es geändert werden'
+                : 'läuft am ' . fmt_local($u['pw_valid_until']) . ' Uhr ab', 'url' => $url];
+        $subject = trim(render_tpl($tpl['subject'], $vars));
+        $body = render_tpl($tpl['body'], $vars);
+        $res = mail_deliver(['to' => array_filter([$u['email']]), 'cc' => $cc1 !== '' ? [$cc1] : [], 'subject' => $subject, 'body' => $body]);
+        $sum = mail_record('pw_reminder', null, $subject, $body, $res);
+        db()->prepare('UPDATE ' . t('account') . ' SET pw_reminder_at = ? WHERE id = ?')->execute([gmdate('Y-m-d H:i:s', $now), $id]);
+        audit('mail.pw_reminder', 'user:' . $id, ['state' => $state, 'recipients' => $sum['total'], 'ok' => $sum['ok'], 'failed' => $sum['failed']], 'system:cron', 0);
+        $log[] = "Passwort-Erinnerung $id ($state): {$sum['ok']}/{$sum['total']} zugestellt";
+    }
+    users(false, true);
+
+    $set = stage1_set_at();
+    $max = (int)cfg('auth.stage1_max_age_days', 0);
+    if ($set !== '' && $max > 0 && $cc1 !== '') {
+        $due = utc_ts($set) + $max * 86400;
+        $last = (int)(kv_get('stage1_reminder_ts') ?? 0);
+        if ($now >= $due - (int)cfg('auth.password_remind_days', 14) * 86400 && $now - $last >= $repeat) {
+            $vars = ['name' => 'Verantwortliche', 'what' => 'Das gemeinsame Zugangspasswort (Stufe 1)',
+                'phrase' => ($now >= $due ? 'sollte seit ' : 'sollte bis ') . fmt_local(gmdate('Y-m-d H:i:s', $due))
+                    . ' Uhr gewechselt werden (Menü System → Zugangspasswort)', 'url' => $url];
+            $subject = trim(render_tpl($tpl['subject'], $vars));
+            $body = render_tpl($tpl['body'], $vars);
+            $sum = mail_record('pw_reminder', null, $subject, $body, mail_deliver(['to' => [$cc1], 'subject' => $subject, 'body' => $body]));
+            kv_set('stage1_reminder_ts', (string)$now);
+            audit('mail.pw_reminder', 'stage1', ['recipients' => $sum['total'], 'ok' => $sum['ok'], 'failed' => $sum['failed']], 'system:cron', 0);
+            $log[] = 'Erinnerung Wechsel Zugangspasswort Stufe 1';
+        }
+    }
+    return $log;
+}
+
+/* ====================================================================== */
+/* Systemprüfung (System-Seite und `php setup.php check`)                 */
+/* ====================================================================== */
+
+/** Liste von [ok, Meldung]. */
+function system_check(): array
+{
+    $r = [];
+    $chk = function (bool $ok, string $msg) use (&$r): void {
+        $r[] = [$ok, $msg];
+    };
+    $keyOk = false;
+    try {
+        master_key();
+        $keyOk = true;
+        $chk(true, 'Master-Key vorhanden');
+    } catch (Throwable $e) {
+        $chk(false, $e->getMessage());
+    }
+    $dbOk = false;
+    try {
+        db();
+        $dbOk = true;
+        $chk(true, 'Datenbank erreichbar, Tabellen vorhanden');
+    } catch (Throwable $e) {
+        $chk(false, 'Datenbank nicht erreichbar: ' . $e->getMessage());
+    }
+    $chk(stage1_hash() !== '', 'Zugangspasswort Stufe 1 gesetzt');
+    $chk(stage1_set_at() !== '', 'Datum des Zugangspassworts bekannt (sonst einmal neu setzen)');
+    $chk($dbOk && count(array_filter(users(), fn($u) => $u['role'] === 'admin')) > 0, 'Mindestens ein aktiver Admin');
+    foreach ($dbOk ? users(true) : [] as $id => $u) {
+        if (!$u['mac_ok']) {
+            $chk(false, "Benutzer $id: Integritätsfehler (Zeile in der Datenbank verändert?)");
+        }
+    }
+    foreach ($dbOk ? users() : [] as $id => $u) {
+        if ($u['totp_secret'] === '') {
+            $chk(false, "Benutzer $id: Authenticator-App noch nicht gekoppelt (passiert beim ersten Login)");
+        }
+    }
+    foreach ($dbOk && $keyOk ? ['stage1', 'recipients', 'cc1'] : [] as $k) {
+        if (setting_broken($k)) {
+            $chk(false, "Einstellung $k nicht lesbar – Datenbank verändert oder falscher Master-Key");
+        }
+    }
+    $base = (string)cfg('app.base_url');
+    $chk(!str_contains($base, 'example.invalid'), 'Adresse der Seite (app.base_url) gesetzt');
+    $chk(str_starts_with($base, 'https://'), 'Adresse der Seite nutzt HTTPS');
+    $n = $keyOk ? count(alarm_recipients()) : 0;
+    $chk($n > 0, 'ALARM-Empfänger vorhanden (' . $n . ')');
+    $cc1 = $keyOk ? cc_default_mail1() : '';
+    $chk($cc1 !== '' && !str_contains($cc1, 'example.invalid'), 'Kopie-Adresse (cc_default_mail1) gesetzt');
+    $chk((string)cfg('mail.transport') === 'smtp', 'Mailversand per SMTP (nicht nur Testmodus "log")');
+    $chk((string)cfg('cron.token', '') !== '', 'Cron-Token gesetzt (für den Aufruf per URL)');
+    $last = $dbOk ? (int)(kv_get('cron_last') ?? 0) : 0;
+    $chk($last > 0 && time() - $last < 1800, 'Cron läuft (letzter Lauf: ' . ($last ? fmt_local(gmdate('Y-m-d H:i:s', $last)) : 'noch nie') . ')');
+    if ($dbOk && $keyOk) {
+        $v = audit_verify();
+        $chk($v['ok'], 'Protokoll-Kette ' . ($v['ok'] ? 'intakt' : 'DEFEKT: ' . $v['error']) . " ({$v['count']} Einträge, Kopf-Hash {$v['head']})");
+    }
+    $json = (string)cfg('app.json_path');
+    $errs = bcm_validate(json_decode((string)@file_get_contents($json), true) ?? []);
+    $chk(!$errs, 'config.json Struktur' . ($errs ? ': ' . implode('; ', $errs) : ''));
+    $chk(!is_writable($json), 'config.json für PHP schreibgeschützt (Rechte 0444)');
+    if (!$errs) {
+        foreach (bcm_lint(bcm()) as $w) {
+            $chk(false, 'Textprüfung: ' . $w);
+        }
+    }
+    $chk(!is_file(__DIR__ . '/install.php') || is_installed(), 'Einrichtungsassistent gesperrt');
+    return $r;
+}
+
+/** Eingerichtet = Master-Key, Datenbank und mindestens ein Admin. Sperrt install.php. */
+function is_installed(): bool
+{
+    try {
+        master_key();
+        db();
+        return count(array_filter(users(), fn($u) => $u['role'] === 'admin')) > 0;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/** Eingabefeld für den TOTP-Code eines Admins (Bestätigung einzelner Aktionen). */
+function totp_input(string $idSuffix): string
+{
+    return '<label class="form-label small" for="t' . h($idSuffix) . '">Ihr TOTP-Code</label>'
+        . '<input class="form-control mb-2" id="t' . h($idSuffix) . '" type="text" name="totp" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required>';
+}
+
+/** Prüft den TOTP-Code einer Admin-Aktion inkl. Sperre und Protokoll. Rückgabe: Fehlermeldung oder null. */
+function admin_totp_check(array $user, string $object, string $action): ?string
+{
+    if (($wait = throttle_locked('s2t', $user['id'])) > 0) {
+        return 'Zu viele ungültige Codes. Bitte in ca. ' . (int)ceil($wait / 60) . ' Minute(n) erneut versuchen.';
+    }
+    $good = totp_verify_user($user, (string)($_POST['totp'] ?? ''));
+    throttle_record('s2t', $user['id'], $good);
+    if (!$good) {
+        fail_delay();
+        audit('totp.fail', $object, ['action' => $action]);
+        return 'Der Bestätigungscode ist ungültig oder bereits verwendet.';
+    }
+    return null;
+}
+
+/** otpauth-URI für Authenticator-Apps */
+function totp_uri(string $userId, string $secretB32): string
+{
+    $issuer = (string)cfg('app.title', 'Status');
+    return 'otpauth://totp/' . rawurlencode($issuer . ':' . $userId) . '?secret=' . $secretB32
+        . '&issuer=' . rawurlencode($issuer) . '&algorithm=SHA1&digits=6&period=30';
 }
 
 /* ====================================================================== */
@@ -1831,7 +2491,12 @@ function nav(string $active, bool $showLogout = true): void
     echo '<header class="d-flex flex-wrap align-items-center gap-2 mb-3 pb-2 border-bottom">';
     echo '<p class="app-title fw-bold me-auto">' . h((string)cfg('app.title', 'Status')) . '</p>';
     echo '<nav class="nav nav-pills">';
-    foreach (['status' => ['status.php', 'Status'], 'change' => ['change.php', 'Einstellungen']] as $k => [$href, $label]) {
+    $links = ['status' => ['status.php', 'Status'], 'change' => ['change.php', 'Einstellungen']];
+    if (session_status() === PHP_SESSION_ACTIVE && (stage2_user()['role'] ?? '') === 'admin') {
+        $links['admin'] = ['admin.php', 'Benutzer'];
+        $links['system'] = ['system.php', 'System'];
+    }
+    foreach ($links as $k => [$href, $label]) {
         echo '<a class="nav-link py-1 px-2' . ($active === $k ? ' active" aria-current="page' : '') . '" href="' . $href . '">' . $label . '</a>';
     }
     echo '</nav>';

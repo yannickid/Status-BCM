@@ -1,11 +1,18 @@
 <?php
 /**
- * Status-BCM – Einrichtung per Kommandozeile (nur CLI).
+ * Status-BCM – Einrichtung per Kommandozeile (nur CLI). OPTIONAL: Ohne SSH-Zugang erledigen install.php
+ * (Ersteinrichtung) sowie die Seiten "System" und "Benutzer" dasselbe im Browser.
  *
  *   php setup.php init                          Master-Key + Cron-Token erzeugen (config.local.inc.php)
  *   php setup.php set-stage1                    Zugangspasswort Stufe 1 setzen
- *   php setup.php add-user <id> "<Name>" <mail> Benutzer Stufe 2 anlegen (Passwort + TOTP-Secret)
- *   php setup.php list-users | remove-user <id>
+ *   php setup.php add-user <id> "<Name>" <mail> [admin|editor] [--config]
+ *                                               Benutzer Stufe 2 anlegen (Passwort + TOTP-Secret), Standard: admin.
+ *                                               --config: in config.local.inc.php statt in die DB (Webspace ohne SSH:
+ *                                               lokal ausführen, Datei per FTP hochladen)
+ *   php setup.php list-users                    Benutzer mit Rolle, Passwortalter und Gültigkeit
+ *   php setup.php reset-password <id>           Einmalpasswort erzeugen (Notfall, z. B. letzter Admin ausgesperrt)
+ *   php setup.php disable-user <id> | enable-user <id>
+ *   php setup.php migrate-users                 Benutzer aus config.local.inc.php in die Datenbank übernehmen
  *   php setup.php add-recipient <mail>          ALARM-Empfänger (verschlüsselt) hinzufügen
  *   php setup.php list-recipients | remove-recipient <nr>
  *   php setup.php set-cc1 <mail>                cc_default_mail1 (Erinnerungen, Audit-Anker) verschlüsselt setzen
@@ -38,30 +45,19 @@ function fail(string $s): void
 
 function local_path(): string
 {
-    return getenv('SBCM_LOCAL_CONFIG') ?: (__DIR__ . '/config.local.inc.php');
+    return local_config_path();
 }
 
 function local_load(): array
 {
-    $p = local_path();
-    if (!is_file($p)) {
-        return [];
-    }
-    $a = require $p;
-    return is_array($a) ? $a : [];
+    return local_config_load();
 }
 
 function local_save(array $a): void
 {
-    $p = local_path();
-    $code = "<?php\n// Von setup.php erzeugt – enthält Geheimnisse. NICHT committen, Rechte 0600.\n"
-        . "if (!defined('SBCM')) { http_response_code(403); exit; }\nreturn " . var_export($a, true) . ";\n";
-    $tmp = $p . '.tmp';
-    if (file_put_contents($tmp, $code, LOCK_EX) === false) {
+    if (!local_config_write($a)) {
         fail('config.local.inc.php nicht schreibbar');
     }
-    @chmod($tmp, 0600);
-    rename($tmp, $p);
 }
 
 function prompt_secret(string $q): string
@@ -93,12 +89,13 @@ function new_password(int $min): string
 }
 
 $cmd = $argv[1] ?? 'help';
-$args = array_slice($argv, 2);
+$args = array_values(array_filter(array_slice($argv, 2), fn($a) => !str_starts_with($a, '--')));
+$flags = array_values(array_filter(array_slice($argv, 2), fn($a) => str_starts_with($a, '--')));
 
 switch ($cmd) {
     case 'init':
         $l = local_load();
-        if (!empty($l['security']['master_key']) && !in_array('--force', $args, true)) {
+        if (!empty($l['security']['master_key']) && !in_array('--force', $flags, true)) {
             fail('master_key existiert bereits. Ein Wechsel macht verschlüsselte Daten unlesbar (--force nur für Neuinstallationen).');
         }
         $l['security']['master_key'] = base64_encode(random_bytes(32));
@@ -109,90 +106,129 @@ switch ($cmd) {
         out('config.local.inc.php erzeugt: ' . local_path());
         out('Cron-Token (für cron.php?t=...): ' . $l['cron']['token']);
         out('SICHERN Sie config.local.inc.php separat (Master-Key!). Ohne den Key sind Status/Protokoll nicht lesbar.');
-        out('Nächste Schritte: set-stage1, add-user, add-recipient, set-cc1, install-db, check');
+        out('Nächste Schritte: set-stage1, add-user, add-recipient, set-cc1, check (Tabellen entstehen automatisch)');
         break;
 
     case 'set-stage1':
         $pw = new_password(10);
-        $l = local_load();
-        $l['auth']['stage1_hash'] = password_hash($pw, PASSWORD_DEFAULT);
-        local_save($l);
-        out('Stufe-1-Passwort gesetzt.');
+        if ($e = stage1_change($pw, $pw, 'system:cli')) {
+            fail(implode(' ', $e));
+        }
+        out('Zugangspasswort Stufe 1 gesetzt (verschlüsselt in der Datenbank, wie über System im Browser).');
         break;
 
     case 'add-user':
         [$id, $name, $mail] = [strtolower((string)($args[0] ?? '')), (string)($args[1] ?? ''), (string)($args[2] ?? '')];
-        if (!preg_match('/^[a-z0-9_-]{2,32}$/', $id) || $name === '' || !filter_var($mail, FILTER_VALIDATE_EMAIL)) {
-            fail('Aufruf: php setup.php add-user <id [a-z0-9_-]> "<Name>" <email>');
+        $role = (string)($args[3] ?? 'admin');
+        if (!preg_match('/^[a-z0-9_-]{2,32}$/', $id) || $name === '' || !filter_var($mail, FILTER_VALIDATE_EMAIL) || !in_array($role, ['admin', 'editor'], true)) {
+            fail('Aufruf: php setup.php add-user <id [a-z0-9_-]> "<Name>" <email> [admin|editor]');
         }
-        $pw = new_password(12);
+        $pw = new_password(max(12, (int)cfg('auth.password_min_length', 12)));
+        if ($pe = password_policy($pw, $id)) {
+            fail(implode(' ', $pe));
+        }
         $secret = b32_encode(random_bytes(20));
-        $l = local_load();
-        $l['auth']['users'][$id] = ['name' => $name, 'email' => cfg_encrypt(strtolower($mail)), 'hash' => password_hash($pw, PASSWORD_DEFAULT), 'totp_secret' => cfg_encrypt($secret)];
-        local_save($l);
+        if (in_array('--config', $flags, true)) {
+            $l = local_load();
+            $l['auth']['users'][$id] = ['name' => $name, 'email' => cfg_encrypt(strtolower($mail)), 'hash' => password_hash($pw, PASSWORD_DEFAULT),
+                'totp_secret' => cfg_encrypt($secret), 'pw_set_at' => now_utc()];
+            local_save($l);
+        } else {
+            try {
+                account_action('create', $id, ['name' => $name, 'email' => $mail, 'role' => $role, 'password' => $pw, 'totp_b32' => $secret], 'system:cli');
+            } catch (InvalidArgumentException $e) {
+                fail($e->getMessage());
+            }
+        }
         $uri = 'otpauth://totp/' . rawurlencode('Status-BCM:' . $id) . '?secret=' . $secret . '&issuer=Status-BCM&algorithm=SHA1&digits=6&period=30';
-        out("Benutzer $id angelegt.");
+        out("Benutzer $id ($role) angelegt.");
         out("TOTP-Secret (in Authenticator-App manuell eintragen): $secret");
         out("otpauth-URI: $uri");
         out('QR-Code lokal erzeugen (Secret nie an Online-Dienste geben):  qrencode -t ANSIUTF8 \'' . $uri . '\'');
         out("Danach testen mit: php setup.php totp-check $id <Code>");
+        out('Weitere Benutzer am besten über admin.php anlegen (Einmalpasswort, eigene App-Kopplung).');
         break;
 
     case 'list-users':
-        foreach (users() as $id => $u) {
-            out(sprintf('%-16s %-24s %s  TOTP: %s', $id, $u['name'], mask_email($u['email']), $u['totp_secret'] !== '' ? 'ja' : 'NEIN'));
+        foreach (users(true) as $id => $u) {
+            out(sprintf('%-16s %-22s %-6s %-6s %s  TOTP:%s  PW gesetzt: %s  gültig bis: %s  [%s%s%s]', $id, mb_substr($u['name'], 0, 22), $u['role'],
+                $u['source'], mask_email($u['email'] ?: 'x@x.x'), $u['totp_secret'] !== '' ? 'ja' : 'NEIN', fmt_local($u['pw_set_at'] ?? null),
+                empty($u['pw_valid_until']) ? 'unbefristet' : fmt_local($u['pw_valid_until']), $u['active'] ? pw_state($u) : 'deaktiviert',
+                $u['must_change'] ? ', Einmalpasswort' : '', $u['mac_ok'] ? '' : ', INTEGRITÄTSFEHLER'));
         }
+        break;
+
+    case 'reset-password':
+    case 'disable-user':
+    case 'enable-user':
+        $id = strtolower((string)($args[0] ?? ''));
+        $map = ['reset-password' => 'reset_pw', 'disable-user' => 'disable', 'enable-user' => 'enable'];
+        try {
+            $once = account_action($map[$cmd], $id, [], 'system:cli');
+        } catch (Throwable $e) {
+            fail($e->getMessage());
+        }
+        out($once !== null ? "Einmalpasswort für $id: $once  (beim Login muss ein eigenes Passwort gesetzt werden)" : 'Erledigt.');
         break;
 
     case 'remove-user':
-        $id = strtolower((string)($args[0] ?? ''));
+        fail('Benutzer werden nicht gelöscht (Nachvollziehbarkeit). Stattdessen: php setup.php disable-user <id>');
+        break;
+
+    case 'migrate-users':
         $l = local_load();
-        if (!isset($l['auth']['users'][$id])) {
-            fail('Benutzer nicht in config.local.inc.php gefunden.');
+        $n = 0;
+        foreach ((array)($l['auth']['users'] ?? []) as $id => $u) {
+            $id = strtolower((string)$id);
+            if (account_get_row($id)) {
+                out("$id existiert bereits in der Datenbank – übersprungen.");
+                continue;
+            }
+            $now = time();
+            tx(function () use ($id, $u, $now) {
+                account_write($id, ['name' => (string)($u['name'] ?? $id), 'email' => strtolower(cfg_secret((string)($u['email'] ?? ''))),
+                    'hash' => (string)($u['hash'] ?? ''), 'totp_b32' => cfg_secret((string)($u['totp_secret'] ?? '')), 'role' => 'admin',
+                    'must_change' => false, 'active' => true, 'pw_set_at' => (string)($u['pw_set_at'] ?? gmdate('Y-m-d H:i:s', $now)),
+                    'pw_valid_until' => pw_valid_until_from($now)], true, 'system:cli');
+                audit('user.create', 'user:' . $id, ['user' => $id, 'role' => 'admin', 'migrated' => true], 'system:cli', 0);
+            });
+            unset($l['auth']['users'][$id]);
+            $n++;
+            out("$id übernommen (Rolle admin).");
         }
-        unset($l['auth']['users'][$id]);
         local_save($l);
-        out("Benutzer $id entfernt.");
+        out("$n Benutzer migriert und aus config.local.inc.php entfernt.");
         break;
 
     case 'add-recipient':
-        $mail = strtolower(trim((string)($args[0] ?? '')));
-        if (!filter_var($mail, FILTER_VALIDATE_EMAIL)) {
-            fail('Aufruf: php setup.php add-recipient <email>');
+        [$n, $e] = recipients_add((string)($args[0] ?? ''), 'system:cli');
+        if ($e) {
+            fail($e);
         }
-        $l = local_load();
-        $l['mail']['recipients'] ??= [];
-        $l['mail']['recipients'][] = cfg_encrypt($mail);
-        local_save($l);
-        out('Empfänger gespeichert (verschlüsselt): ' . mask_email($mail));
+        out($n > 0 ? 'Empfänger gespeichert (verschlüsselt): ' . mask_email(strtolower((string)$args[0])) : 'Adresse war bereits eingetragen.');
         break;
 
     case 'list-recipients':
-        foreach (array_values(alarm_recipients()) as $i => $r) {
+        foreach (recipients_web() as $i => $r) {
             out(sprintf('%2d  %s', $i + 1, mask_email($r)));
+        }
+        foreach (array_diff(alarm_recipients(), recipients_web()) as $r) {
+            out(' -  ' . mask_email($r) . '  (aus config.local.inc.php)');
         }
         break;
 
     case 'remove-recipient':
-        $n = (int)($args[0] ?? 0);
-        $l = local_load();
-        if ($n < 1 || !isset($l['mail']['recipients'][$n - 1])) {
-            fail('Nummer aus list-recipients angeben.');
+        if (!recipients_remove((int)($args[0] ?? 0) - 1, 'system:cli')) {
+            fail('Nummer aus list-recipients angeben (Einträge aus config.local.inc.php dort entfernen).');
         }
-        array_splice($l['mail']['recipients'], $n - 1, 1);
-        local_save($l);
         out('Empfänger entfernt.');
         break;
 
     case 'set-cc1':
-        $mail = strtolower(trim((string)($args[0] ?? '')));
-        if (!filter_var($mail, FILTER_VALIDATE_EMAIL)) {
-            fail('Aufruf: php setup.php set-cc1 <email>');
+        if ($e = cc1_change((string)($args[0] ?? ''), 'system:cli')) {
+            fail($e);
         }
-        $l = local_load();
-        $l['mail']['cc_default_mail1'] = cfg_encrypt($mail);
-        local_save($l);
-        out('cc_default_mail1 gespeichert (verschlüsselt): ' . mask_email($mail));
+        out('cc_default_mail1 gespeichert (verschlüsselt): ' . mask_email(strtolower((string)$args[0])));
         break;
 
     case 'encrypt-value':
@@ -209,38 +245,9 @@ switch ($cmd) {
 
     case 'check':
         $problems = 0;
-        $chk = function (bool $ok, string $msg) use (&$problems) {
-            out(($ok ? '[ok]   ' : '[FEHL] ') . $msg);
+        foreach (system_check() as [$ok, $msg]) {
+            out(($ok ? '[ok]   ' : '[OFFEN] ') . $msg);
             $problems += $ok ? 0 : 1;
-        };
-        try {
-            master_key();
-            $chk(true, 'Master-Key vorhanden');
-        } catch (Throwable $e) {
-            $chk(false, $e->getMessage());
-        }
-        $chk((string)cfg('auth.stage1_hash', '') !== '', 'Stufe-1-Passwort gesetzt');
-        $chk(count(users()) > 0, 'Mindestens ein Benutzer Stufe 2');
-        foreach (users() as $id => $u) {
-            $chk($u['hash'] !== '' && totp_secret_of($u) !== '', "Benutzer $id: Passwort und TOTP vorhanden");
-        }
-        $chk(!str_contains((string)cfg('app.base_url'), 'example.invalid'), 'app.base_url gesetzt');
-        $chk(str_starts_with((string)cfg('app.base_url'), 'https://'), 'app.base_url nutzt HTTPS');
-        $chk(count(alarm_recipients()) > 0, 'ALARM-Empfänger vorhanden (' . count(alarm_recipients()) . ')');
-        $chk(cc_default_mail1() !== '' && !str_contains(cc_default_mail1(), 'example.invalid'), 'mail.cc_default_mail1 gültig');
-        $chk((string)cfg('mail.transport') === 'smtp', 'Mail-Transport = smtp');
-        $chk((string)cfg('cron.token', '') !== '', 'Cron-Token gesetzt (für URL-Aufruf)');
-        try {
-            db();
-            $chk(true, 'Datenbank erreichbar, Schema vorhanden');
-        } catch (Throwable $e) {
-            $chk(false, 'Datenbank: ' . $e->getMessage());
-        }
-        $errs = bcm_validate(json_decode((string)file_get_contents((string)cfg('app.json_path')), true) ?? []);
-        $chk(!is_writable((string)cfg('app.json_path')), 'config.json für PHP schreibgeschützt (chmod 0444)');
-        $chk(!$errs, 'config.json Struktur' . ($errs ? ': ' . implode('; ', $errs) : ''));
-        foreach (bcm_lint(bcm()) as $w) {
-            $chk(false, 'Textprüfung: ' . $w);
         }
         out($problems === 0 ? 'Alles in Ordnung.' : "$problems Punkt(e) offen.");
         exit($problems === 0 ? 0 : 2);
