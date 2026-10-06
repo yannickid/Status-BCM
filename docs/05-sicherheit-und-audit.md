@@ -37,8 +37,8 @@ Aushang) ist vorzuhalten.
 
 | Grundwert | Schutzbedarf | Begründung |
 |---|---|---|
-| Integrität | **hoch** | Eine gefälschte Statusmeldung ("Standort gesperrt") kann Personen gefährden, Abläufe stören und Reputationsschaden verursachen. |
-| Verfügbarkeit | **hoch** (im Ereignisfall) | Die Seite wird gerade dann gebraucht, wenn andere Kanäle gestört sind. |
+| Integrität | **normal/hoch** | Eine gefälschte Statusmeldung ("Standort gesperrt") kann Personen gefährden, Abläufe stören und Reputationsschaden verursachen. |
+| Verfügbarkeit | **hoch** (im Ereignisfall), sonst **normal** | Die Seite wird gerade dann gebraucht, wenn andere Kanäle gestört sind. |
 | Vertraulichkeit | **normal** bis **hoch** | Statusmeldungen sind auf "könnte öffentlich werden" ausgelegt. Empfängerlisten, Benutzerdaten und Protokolle sind vertraulich. |
 
 Daraus folgen die Schwerpunkte: Änderungen nur durch Berechtigte und nachweisbar, Manipulation erkennbar,
