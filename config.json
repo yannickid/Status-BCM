@@ -1,0 +1,178 @@
+{
+  "version": 1,
+  "default_status": "NORMAL",
+  "default_phone": "+49 30 12345-0",
+
+  "severity_labels": {
+    "ok": "Normal",
+    "info": "Information",
+    "warn": "Hinweis",
+    "critical": "Wichtiger Hinweis"
+  },
+
+  "validity_options_minutes": [60, 120, 240, 480, 1440, 2880],
+
+  "forbidden_terms": [
+    "angriff", "hacker", "ransomware", "erpress", "datenleck", "datenabfluss",
+    "kompromittiert", "schwachstelle", "versagen", "schuld", "verschulden",
+    "amok", "täter", "terror", "bombe", "geisel", "verletzte", "totalausfall",
+    "katastroph", "panne", "versehentlich", "skandal", "infolge", "ursache",
+    "wegen eines", "gestohlen", "vorfall"
+  ],
+
+  "locations": [
+    { "id": "muc-sued",   "name": "Standort München Süd",   "phone": "+49 89 12345-110" },
+    { "id": "nue-mitte",  "name": "Standort Nürnberg Mitte", "phone": "" },
+    { "id": "ber-nord",   "name": "Standort Berlin Nord",   "phone": "+49 30 12345-120" },
+    { "id": "ham-hafen",  "name": "Standort Hamburg Hafen", "phone": "" }
+  ],
+
+  "statuses": [
+    {
+      "key": "NORMAL",
+      "label": "Regelbetrieb",
+      "severity": "ok",
+      "audience": "ALLE",
+      "text": "Es liegen aktuell keine besonderen Hinweise vor. Der Betrieb läuft regulär.",
+      "alarm_mail_allowed": false,
+      "require_validity": false,
+      "allow_unlimited": true,
+      "require_totp": false
+    },
+    {
+      "key": "HINWEIS",
+      "label": "Organisatorischer Hinweis",
+      "severity": "info",
+      "audience": "ALLE",
+      "text": "Es gibt eine organisatorische Information. Bitte beachten Sie die Mitteilungen Ihrer Vorgesetzten.",
+      "alarm_mail_allowed": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": false
+    },
+    {
+      "key": "UEBUNG",
+      "label": "Übung",
+      "severity": "info",
+      "audience": "ALLE_UND_ADRESSLISTE",
+      "exercise": true,
+      "text": "Hinweis: Es findet eine angekündigte Übung statt. Es besteht keine reale Gefährdung. Bitte beachten Sie die Hinweise der Übungsleitung.",
+      "alarm_mail_allowed": true,
+      "alarm_mail_default": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
+    },
+    {
+      "key": "EINSCHR_DIGITAL",
+      "label": "Eingeschränkte digitale Dienste",
+      "severity": "warn",
+      "audience": "ALLE",
+      "text": "Einzelne digitale Dienste stehen derzeit nur eingeschränkt zur Verfügung. Die Wiederherstellung wird vorbereitet. Bitte nutzen Sie bei dringenden Anliegen die angegebene Rufnummer.",
+      "alarm_mail_allowed": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
+    },
+    {
+      "key": "MOBIL_ARBEITEN",
+      "label": "Mobiles Arbeiten empfohlen",
+      "severity": "warn",
+      "audience": "ALLE_UND_ADRESSLISTE",
+      "text": "Bitte arbeiten Sie bis auf Weiteres, soweit möglich, mobil. Weitere Hinweise erhalten Sie von Ihren Vorgesetzten.",
+      "alarm_mail_allowed": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
+    },
+    {
+      "key": "STANDORT_EINGESCHRAENKT",
+      "label": "Eingeschränkter Betrieb am Standort",
+      "severity": "warn",
+      "audience": "ALLE_UND_ADRESSLISTE",
+      "text": "Am genannten Standort gilt derzeit ein eingeschränkter Betrieb. Bitte beachten Sie die Hinweise vor Ort und die Informationen Ihrer Vorgesetzten.",
+      "alarm_mail_allowed": true,
+      "alarm_mail_default": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
+    },
+    {
+      "key": "STANDORT_GESPERRT",
+      "label": "Standort vorübergehend nicht zugänglich",
+      "severity": "critical",
+      "audience": "ALLE_UND_ADRESSLISTE",
+      "text": "Aus Vorsorgegründen ist das Betreten des genannten Standorts vorübergehend nicht möglich. Bitte folgen Sie den Anweisungen vor Ort und nutzen Sie bei Fragen die angegebene Rufnummer.",
+      "alarm_mail_allowed": true,
+      "alarm_mail_default": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
+    },
+    {
+      "key": "SICHERHEITSMASSNAHME",
+      "label": "Sicherheitsmaßnahme",
+      "severity": "critical",
+      "audience": "ALLE_UND_ADRESSLISTE",
+      "text": "Für den genannten Standort gilt aus Vorsorgegründen eine Sicherheitsmaßnahme. Bitte folgen Sie den Anweisungen der Sicherheits- und Einsatzkräfte und nutzen Sie bei Rückfragen die angegebene Rufnummer.",
+      "alarm_mail_allowed": true,
+      "alarm_mail_default": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
+    }
+  ],
+
+  "mail_templates": {
+    "alarm": {
+      "subject": "{prefix}Statusmeldung: {label}",
+      "body": [
+        "{prefix}Statusmeldung: {label}",
+        "",
+        "{text}",
+        "",
+        "{locations}",
+        "Rückfragen: {phone}",
+        "{validity}",
+        "",
+        "Aktuelle Informationen (Anmeldung erforderlich): {url}",
+        "",
+        "Diese Nachricht wurde automatisch erstellt. Bitte nicht antworten."
+      ]
+    },
+    "reminder": {
+      "subject": "Statusmeldung prüfen: {label}",
+      "body": [
+        "Guten Tag {author_name},",
+        "",
+        "die Statusmeldung \"{label}\" (gesetzt am {created}) {expiry_phrase}.",
+        "",
+        "Bitte prüfen Sie, ob der Status noch gültig ist:",
+        "- weiterhin gültig: Status verlängern",
+        "- nicht mehr gültig: Status beenden",
+        "",
+        "{change_url}",
+        "",
+        "Diese Erinnerung wird wiederholt, bis der Status verlängert oder beendet wurde."
+      ]
+    },
+    "autorevert": {
+      "subject": "Statusmeldung automatisch zurückgesetzt",
+      "body": [
+        "Die Statusmeldung \"{label}\" wurde nach Ablauf ohne Bestätigung automatisch auf \"{new_label}\" zurückgesetzt.",
+        "",
+        "{change_url}"
+      ]
+    },
+    "anchor": {
+      "subject": "Status-BCM Audit-Anker {date}",
+      "body": [
+        "Audit-Kette: {verify}",
+        "Einträge: {count}",
+        "Aktueller Kopf-Hash: {head}",
+        "",
+        "Bitte aufbewahren. Weicht der Hash später ab oder verkürzt sich die Kette, wurde das Protokoll verändert."
+      ]
+    }
+  }
+}

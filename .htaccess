@@ -1,0 +1,40 @@
+# Status-BCM – Zugriffsschutz (Apache). Auf nginx-Hosting gelten diese Regeln NICHT:
+# dort config.json/storage/tests außerhalb des Webroots legen bzw. per location sperren (siehe README).
+
+Options -Indexes
+DirectoryIndex index.php
+
+# Interne Dateien niemals ausliefern
+<FilesMatch "^(config\.inc\.php|config\.local\.inc\.php(\.tmp)?|lib\.inc\.php|setup\.php|config\.json|README\.md|\.gitignore)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<FilesMatch "\.(sqlite|sqlite3|db|log|eml|lock|bak|orig|sh)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Versteckte Dateien (.git, .env, ...) und interne Verzeichnisse
+<IfModule mod_alias.c>
+    RedirectMatch 404 /\.(?!well-known)
+    RedirectMatch 404 /(tests|storage)(/|$)
+</IfModule>
+
+# HTTPS erzwingen (Zeile aktivieren, wenn das Hosting HTTPS anbietet)
+# <IfModule mod_rewrite.c>
+#   RewriteEngine On
+#   RewriteCond %{HTTPS} !=on
+#   RewriteCond %{HTTP:X-Forwarded-Proto} !https
+#   RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+# </IfModule>
