@@ -54,7 +54,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             : 'Testmail fehlgeschlagen. SMTP-Daten in config.local.inc.php prüfen (Fehlerdetails im Server-Fehlerlog).');
         redirect('system.php');
     } elseif (!in_array($act, ['circle_create', 'circle_update', 'circle_delete', 'location_save', 'location_delete',
-        'contact_save', 'contact_delete', 'prefix', 'cc1', 'stage1'], true)) {
+        'contact_save', 'contact_delete', 'prefix', 'cc1', 'stage1', 'stage1_user'], true)) {
         $errors[] = 'Ungültige Aktion.';
     } elseif ($err = admin_totp_check($user, 'system', $act)) {
         $errors[] = $err;
@@ -66,6 +66,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             'location_save' => 'Standort gespeichert.', 'location_delete' => 'Standort gelöscht.',
             'contact_save' => 'Kontakt gespeichert.', 'contact_delete' => 'Kontakt gelöscht.',
             'prefix' => 'Betreff-Präfixe gespeichert.', 'cc1' => 'Kopie-Adresse gespeichert.',
+            'stage1_user' => 'Benutzername des gemeinsamen Zugangs geändert. Bitte allen Beschäftigten bekannt geben.',
             'stage1' => 'Zugangspasswort geändert. Bitte allen Beschäftigten auf dem üblichen internen Weg bekannt geben.',
         ][$act];
         $del = ($_POST['confirm'] ?? '') === 'ja';
@@ -93,6 +94,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 break;
             case 'prefix':
                 $err = mail_prefixes_set($_POST, $user['id'], $how);
+                break;
+            case 'stage1_user':
+                $err = stage1_user_change((string)($_POST['name'] ?? ''), $user['id'], $how);
                 break;
             case 'cc1':
                 $err = cc1_change((string)($_POST['email'] ?? ''), $user['id'], $how);
@@ -272,7 +276,13 @@ echo '</div></div>';
 /* Zugangspasswort Stufe 1 */
 $s1 = stage1_set_at();
 $s1max = (int)cfg('auth.stage1_max_age_days', 0);
-echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Zugangspasswort für alle (Stufe 1)</h2>';
+echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Gemeinsamer Zugang für alle (Stufe 1)</h2>';
+echo '<p class="small text-body-secondary">Anmeldung auf der Startseite mit Benutzername <strong>' . h(stage1_user()) . '</strong> und dem Zugangspasswort: '
+    . 'nur Lesen. Persönliche Kennungen melden sich im selben Formular an und gelangen direkt in die Einstellungen.</p>';
+echo '<form method="post" action="system.php" class="mb-3" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="stage1_user">'
+    . '<label class="form-label small" for="s1u">Benutzername (z. B. Unternehmen; Groß-/Kleinschreibung egal)</label>'
+    . '<input class="form-control mb-2" id="s1u" name="name" maxlength="40" value="' . h(stage1_user()) . '" autocapitalize="none" required>'
+    . totp_input('s1u') . '<button class="btn btn-sm btn-primary" type="submit">Benutzername ändern</button></form>';
 echo '<p class="small text-body-secondary">Zuletzt gesetzt: ' . h($s1 !== '' ? fmt_local($s1) : 'unbekannt')
     . ($s1max > 0 && $s1 !== '' ? ' · Wechsel empfohlen bis ' . h(fmt_local(gmdate('Y-m-d H:i:s', utc_ts($s1) + $s1max * 86400))) : '')
     . '. Nach dem Wechsel gilt das neue Passwort sofort für neue Anmeldungen.</p>';

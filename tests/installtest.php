@@ -81,10 +81,12 @@ try {
     [, , $b] = req('GET', "$base/install.php", [], $jar);
     ok(str_contains($b, 'Schritt 3 von 3'), 'Schritt 3 erreicht');
     $t = csrf($b);
-    $fin = ['_csrf' => $t, 'action' => 'finish', 's1' => 'Zugang fuer alle 2026', 's1b' => 'Zugang fuer alle 2026',
+    $fin = ['_csrf' => $t, 'action' => 'finish', 's1user' => 'Unternehmen', 's1' => 'Zugang fuer alle 2026', 's1b' => 'Zugang fuer alle 2026',
         'admin_id' => 'chef', 'admin_name' => 'Chefin Test', 'admin_email' => 'chef@test.example',
         'admin_pw' => 'Mein Kaffee ist um 7 Uhr kalt', 'admin_pw2' => 'Mein Kaffee ist um 7 Uhr kalt',
         'cc1' => 'isb@test.example', 'recipients' => "ziel1@ziel.example\nziel2@ziel.example"];
+    [, , $b] = req('POST', "$base/install.php", ['s1user' => 'Chef'] + $fin, $jar);
+    ok(str_contains($b, 'müssen verschieden sein'), 'Benutzername des gemeinsamen Zugangs darf keine Admin-Kennung sein');
     [, , $b] = req('POST', "$base/install.php", ['admin_pw' => 'kurz', 'admin_pw2' => 'kurz'] + $fin, $jar);
     ok(str_contains($b, 'mindestens 12 Zeichen'), 'Passwortregeln gelten auch im Assistenten');
     [, , $b] = req('POST', "$base/install.php", ['recipients' => "ok@ziel.example\nkaputt"] + $fin, $jar);
@@ -101,7 +103,7 @@ try {
     /* --- Erste Anmeldung, QR-Kopplung --- */
     [, , $b] = req('GET', "$base/index.php", [], $jar);
     $t = csrf($b);
-    [$c, $h] = req('POST', "$base/index.php", ['_csrf' => $t, 'action' => 'login', 'password' => 'Zugang fuer alle 2026'], $jar);
+    [$c, $h] = req('POST', "$base/index.php", ['_csrf' => $t, 'action' => 'login', 'user' => 'unternehmen', 'password' => 'Zugang fuer alle 2026'], $jar);
     ok($c === 302 && ($h['location'] ?? '') === 'status.php', 'Zugangspasswort aus dem Assistenten gilt');
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     $t = csrf($b);
@@ -156,9 +158,15 @@ try {
     $jar2 = $tmp . '/jar2.txt';
     [, , $b] = req('GET', "$base/index.php", [], $jar2);
     $t2 = csrf($b);
-    [$c1] = req('POST', "$base/index.php", ['_csrf' => $t2, 'action' => 'login', 'password' => 'Zugang fuer alle 2026'], $jar2);
-    [$c2] = req('POST', "$base/index.php", ['_csrf' => $t2, 'action' => 'login', 'password' => 'Neuer Zugang 2027'], $jar2);
+    [$c1] = req('POST', "$base/index.php", ['_csrf' => $t2, 'action' => 'login', 'user' => 'unternehmen', 'password' => 'Zugang fuer alle 2026'], $jar2);
+    [$c2] = req('POST', "$base/index.php", ['_csrf' => $t2, 'action' => 'login', 'user' => 'unternehmen', 'password' => 'Neuer Zugang 2027'], $jar2);
     ok($c === 302 && $c1 === 200 && $c2 === 302, 'Neues Zugangspasswort gilt sofort, altes nicht mehr');
+    [$c] = req('POST', "$base/system.php", ['_csrf' => $t, 'action' => 'stage1_user', 'name' => 'Firma-X', 'totp' => fresh_code($secret)], $jar);
+    $jar6 = $tmp . '/jar6.txt';
+    [, , $b] = req('GET', "$base/index.php", [], $jar6);
+    [$c1] = req('POST', "$base/index.php", ['_csrf' => csrf($b), 'action' => 'login', 'user' => 'unternehmen', 'password' => 'Neuer Zugang 2027'], $jar6);
+    [$c2, $h2] = req('POST', "$base/index.php", ['_csrf' => csrf($b), 'action' => 'login', 'user' => 'firma-x', 'password' => 'Neuer Zugang 2027'], $jar6);
+    ok($c === 302 && $c1 === 200 && $c2 === 302 && ($h2['location'] ?? '') === 'status.php', 'Benutzername des gemeinsamen Zugangs unter System geändert');
 
     /* --- Protokoll --- */
     [, , $b] = req('GET', "$base/change.php", [], $jar);
@@ -170,7 +178,7 @@ try {
     $pdo = str_starts_with($dsn, 'mysql:') ? new PDO($dsn, (string)getenv('SBCM_TEST_USER'), (string)getenv('SBCM_TEST_PASS'))
         : new PDO('sqlite:' . $tmp . '/storage/status.sqlite');
     $rows = $pdo->query("SELECT k, v FROM {$prefix}kv WHERE k LIKE 'set:%'")->fetchAll(PDO::FETCH_KEY_PAIR);
-    ok(count($rows) === 3 && !preg_grep('/ziel|test\.example|\$2y\$/', $rows), 'Einstellungen nur verschlüsselt in der Datenbank');
+    ok(count($rows) === 4 && !preg_grep('/ziel|test\.example|\$2y\$/', $rows), 'Einstellungen nur verschlüsselt in der Datenbank');
     $pdo->prepare("UPDATE {$prefix}kv SET v = ? WHERE k = 'set:circles'")->execute([$rows['set:cc1']]);
     [, , $b] = req('GET', "$base/system.php", [], $jar);
     ok(str_contains($b, 'Einstellung circles nicht lesbar'), 'Vertauschte Einstellung wird erkannt');
@@ -190,7 +198,7 @@ try {
     $jar5 = $tmp . '/jar5.txt';
     [, , $b] = req('GET', "$base/index.php", [], $jar5);
     $t5 = csrf($b);
-    req('POST', "$base/index.php", ['_csrf' => $t5, 'action' => 'login', 'password' => 'Neuer Zugang 2027'], $jar5);
+    req('POST', "$base/index.php", ['_csrf' => $t5, 'action' => 'login', 'user' => 'Firma-X', 'password' => 'Neuer Zugang 2027'], $jar5);
     [, , $b] = req('GET', "$base/change.php", [], $jar5);
     req('POST', "$base/change.php", ['_csrf' => csrf($b), 'action' => 'login2', 'user' => 'chef', 'password' => $once], $jar5);
     [, , $b] = req('GET', "$base/change.php", [], $jar5);

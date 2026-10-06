@@ -18,7 +18,7 @@
 |---|---|---|
 | Ersteinrichtung | `install.php` | `init`, `set-stage1`, `add-user`, … |
 | Benutzer anlegen, zurücksetzen, deaktivieren, Rolle | **Benutzer** | `add-user`, `reset-password`, `disable-user`, `enable-user` |
-| Zugangspasswort Stufe 1 | **System** | `set-stage1` |
+| Gemeinsamer Zugang (Benutzername, Passwort) | **System** | `set-stage1-user`, `set-stage1` |
 | Alarmkreise, Kopie-Adresse | **System** | `add-recipient`, `list-circles`, `remove-recipient`, `set-cc1` |
 | Standorte (Name, Durchwahl, E-Mail Standortverwaltung), Kontakte, Betreff-Präfixe | **System** | – |
 | Prüfung, Protokoll-Kette, Cron-Status | **System → Prüfung** | `check`, `verify-audit` |
@@ -35,6 +35,7 @@ Browser und Kommandozeile schreiben in dieselben Speicherorte und lassen sich mi
 ```
 php setup.php init                      Master-Key + Cron-Token erzeugen
 php setup.php set-stage1                Zugangspasswort Stufe 1 setzen (Datum wird gespeichert)
+php setup.php set-stage1-user <name>    Benutzername des gemeinsamen Zugangs (Standard: zugang)
 php setup.php add-user <id> "<Name>" <mail> [admin|editor] [--config]
 php setup.php list-users                Rollen, Passwortalter, Gültigkeit, TOTP, Integrität
 php setup.php reset-password <id>       Einmalpasswort (Notfall, z. B. letzter Admin ausgesperrt)

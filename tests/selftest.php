@@ -420,6 +420,11 @@ ok(cc_default_mail1() === 'cc1@test.example' && stage1_hash() === '', 'Ohne Brow
 ok(stage1_change('kurz', 'kurz', 'system:test') !== [] && stage1_change('Zugang fuer alle', 'anders', 'system:test') !== [], 'Zugangspasswort: Länge und Wiederholung geprüft');
 ok(stage1_change('Zugang fuer alle', 'Zugang fuer alle', 'system:test') === [] && verify_stage1('Zugang fuer alle') && stage1_set_at() !== '', 'Zugangspasswort gesetzt, Datum gespeichert');
 ok(stage1_change('Zugang fuer alle', 'Zugang fuer alle', 'system:test') !== [], 'Gleiches Zugangspasswort wird abgelehnt');
+ok(stage1_user() === 'zugang' && stage1_user_change('Anna', 'system:test') !== null && stage1_user_change('mit leer', 'system:test') !== null,
+    'Gemeinsamer Zugang: Standardname, Kollision mit persönlicher Kennung und ungültige Namen abgelehnt');
+ok(stage1_user_change('Unternehmen', 'system:test') === null && login_name_key(stage1_user()) === 'unternehmen'
+    && throws(fn() => account_action('create', 'unternehmen', ['name' => 'X', 'email' => 'x@test.example'], 'anna')),
+    'Gemeinsamer Zugang umbenannt; gleichnamige persönliche Kennung wird abgelehnt');
 ok(cc1_change('kaputt', 'system:test') !== null && cc1_change('Neu@Test.example', 'system:test') === null && cc_default_mail1() === 'neu@test.example', 'Kopie-Adresse ersetzt den Konfigurationswert');
 $raw = kv_get('set:cc1');
 ok(!str_contains((string)$raw, 'test.example') && !setting_broken('circles'), 'Einstellungen verschlüsselt gespeichert');

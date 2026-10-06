@@ -66,9 +66,9 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 
 | Rolle | Anmeldung | Darf |
 |---|---|---|
-| Beschäftigte | Stufe 1: gemeinsames Zugangspasswort | Aktuellen Status lesen |
-| Redaktion (`editor`) | Stufe 1 + Stufe 2 (persönlich) | Status setzen, verlängern, beenden; ALARM-Mail auslösen (mit TOTP); Verlauf, Protokoll und Nutzung einsehen; eigenes Passwort ändern |
-| Admin (`admin`) | wie Redaktion | zusätzlich Benutzerverwaltung (`admin.php`): anlegen, Passwort/TOTP zurücksetzen, Rolle ändern, (de)aktivieren; System (`system.php`): Zugangspasswort Stufe 1, Alarmkreise, Standorte mit Adressen der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse; Änderungen jeweils mit TOTP; Prüfung, Cron-Adresse, Testmail |
+| Beschäftigte | Stufe 1: gemeinsamer Benutzername + Zugangspasswort | Aktuellen Status lesen |
+| Redaktion (`editor`) | persönliche Kennung + Passwort im selben Formular (gilt als Stufe 1 + 2) | Status setzen, verlängern, beenden; ALARM-Mail auslösen (mit TOTP); Verlauf, Protokoll und Nutzung einsehen; eigenes Passwort ändern |
+| Admin (`admin`) | wie Redaktion | zusätzlich Benutzerverwaltung (`admin.php`): anlegen, Passwort/TOTP zurücksetzen, Rolle ändern, (de)aktivieren; System (`system.php`): Benutzername und Zugangspasswort Stufe 1, Alarmkreise, Standorte mit Adressen der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse; Änderungen jeweils mit TOTP; Prüfung, Cron-Adresse, Testmail |
 | Betrieb (FTP, optional Shell) | Zugang zum Webspace | Ersteinrichtung (`install.php` mit Einrichtungscode aus `storage/`), `config.json` und `config.local.inc.php` pflegen, Sicherung; optional `setup.php` |
 
 * **Need-to-know:** Empfängeradressen sieht niemand in der Oberfläche, nur die Anzahl bzw. maskiert (`m****@e***.de`).
@@ -90,7 +90,7 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 | Passwort-Gültigkeit | konfigurierbar (`auth.password_max_age_days`, Standard 365 Tage). Erinnerung per Mail vorher, wöchentlich wiederholt. Ein abgelaufenes Passwort sperrt **nicht** aus, erzwingt aber den sofortigen Wechsel. Eine Aussperrung im Ernstfall wäre ein BCM-Risiko. Das BSI verlangt keinen regelmäßigen Zwangswechsel; ein Wert von 0 schaltet den Ablauf ab. |
 | Ersteinrichtung | Neue Benutzer erhalten ein Einmalpasswort (einmalig angezeigt, persönlich zu übergeben). Beim ersten Login werden ein eigenes Passwort und die Authenticator-App eingerichtet. Admins sehen das TOTP-Secret nie. |
 | Zweiter Faktor | TOTP nach RFC 6238 (Authenticator-App, ohne SMS/Mail), ±30 s Toleranz, **Replay-Schutz** (jeder Zeitschritt nur einmal je Benutzer). Pflicht bei ALARM-Mail, bei Status mit `require_totp` und bei jeder Admin-Aktion; optional für alle Änderungen (`auth.totp_enforce_all`). |
-| Brute-Force-Schutz | Fehlversuche je IP und je Benutzer (Standard 5 bzw. 10 in 15 Min.), verzögerte Fehlantworten, Honeypot-Feld. Gilt getrennt für Stufe 1, Stufe 2, TOTP und den Cron-Token. |
+| Brute-Force-Schutz | Fehlversuche je IP und je Benutzer (Standard 5 bzw. 10 in 15 Min.), verzögerte Fehlantworten, Honeypot-Feld. Gilt getrennt für Stufe 1, Stufe 2, TOTP und den Cron-Token; im gemeinsamen Anmeldeformular zählt ein Fehlversuch mit persönlicher Kennung für die IP-Sperre und die Sperre der Kennung. Die Fehlermeldung verrät nicht, ob ein Name existiert. |
 | Sitzungen | Cookie `HttpOnly`, `SameSite=Strict`, `Secure` (bei HTTPS); neue Session-ID bei jedem Login; Leerlauf-Timeout 30 Min. (Stufe 1) bzw. 15 Min. (Stufe 2); harte Obergrenze 10 h; Strict Mode. |
 | Deaktivierung | wirkt sofort, auch für bestehende Sitzungen. Es muss immer mindestens ein aktiver Admin bleiben. |
 

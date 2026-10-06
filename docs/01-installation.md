@@ -70,7 +70,7 @@ Sie auf "Weiter".
 
 | Feld | Bedeutung |
 |---|---|
-| Zugangspasswort (Stufe 1) | gemeinsames Passwort aller Beschäftigten zum Lesen (mind. 10 Zeichen) |
+| Gemeinsamer Zugang (Stufe 1) | Benutzername (z. B. "Unternehmen", Standard "zugang") und Passwort aller Beschäftigten zum Lesen (mind. 10 Zeichen) |
 | Erster Admin | Kennung, Name, E-Mail, eigenes Passwort (mind. 12 Zeichen, gern ein Satz) |
 | Kopie-Adresse | `cc_default_mail1`: Erinnerungen, Kopie der ALARM-Mails, täglicher Audit-Anker (z. B. ISB) |
 | ALARM-Empfänger | optional, eine Adresse je Zeile; landen im Alarmkreis "Allgemein". Weitere Kreise später unter **System** |
@@ -81,8 +81,8 @@ danach vom Webspace gelöscht werden.
 
 ## 5. Erste Anmeldung und Authenticator-App
 
-1. Startseite → Zugangspasswort eingeben.
-2. **Einstellungen** → Kennung und Passwort des Admins.
+1. Startseite → Kennung und Passwort des Admins eingeben (nicht den gemeinsamen Zugang).
+2. Es öffnet sich **Einstellungen → Zugang einrichten**.
 3. Die Seite zeigt einen **QR-Code**. In der Authenticator-App (Microsoft Authenticator, Google Authenticator,
    FreeOTP, Aegis, …) "Konto hinzufügen" → QR-Code scannen. Ohne Kamera, etwa am selben Smartphone: den darunter
    angezeigten Schlüssel abtippen oder den Link antippen.
@@ -139,6 +139,7 @@ php tests/selftest.php                                   # Selbsttest
 php setup.php init                                       # Master-Key + Cron-Token → config.local.inc.php
 # config.local.inc.php: base_url, db.*, mail.* eintragen
 php setup.php set-stage1                                 # Zugangspasswort Stufe 1
+php setup.php set-stage1-user Unternehmen                # Benutzername des gemeinsamen Zugangs
 php setup.php add-user chef "Vorname Nachname" chef@firma.de admin
 php setup.php add-recipient alarm1@firma.de              # ALARM-Empfänger (Kreis "Allgemein")
 php setup.php set-cc1 isb@firma.de                       # Kopie-Adresse

@@ -4,7 +4,8 @@
 
 1. Die Adresse der Statusseite aufrufen, z. B. `https://status.ihre-domain.de`. Am besten als Lesezeichen oder auf
    dem Startbildschirm des Smartphones ablegen.
-2. Das **Zugangspasswort** eingeben. Es ist für alle gleich und wird intern bekannt gegeben.
+2. **Benutzername** und **Passwort** des gemeinsamen Zugangs eingeben (z. B. "Unternehmen"). Beides ist für alle
+   gleich und wird intern bekannt gegeben. Groß- und Kleinschreibung beim Benutzernamen spielen keine Rolle.
 3. Die Seite zeigt **alle gültigen Meldungen**, die wichtigste zuerst (z. B. "Netzwerk eingeschränkt" an Standort A
    und gleichzeitig "Sicherheitsmaßnahme" an Standort B). Je Meldung:
    * farbiges Etikett (Information, Hinweis, Wichtiger Hinweis) und der Meldungstext,
@@ -19,7 +20,10 @@
 
 ## Für die Redaktion: Meldungen setzen
 
-Menü **Einstellungen** → persönlicher Login (Benutzer + Passwort).
+Auf der Startseite mit der **persönlichen Kennung** und dem eigenen Passwort anmelden. Sie sehen dann die
+Statusseite und zusätzlich das Menü **Einstellungen**, ohne zweites Anmeldeformular. Wer bereits mit dem gemeinsamen
+Zugang angemeldet ist, kann sich auch unter **Einstellungen** persönlich anmelden. Kritische Änderungen (ALARM-Mail,
+kritische Meldungen, Benutzer, System) verlangen weiterhin den TOTP-Code aus der App.
 
 ### Erster Login
 
@@ -123,7 +127,7 @@ Menü **System** (nur Admins). Änderungen verlangen Ihren TOTP-Code und stehen 
 | Kontakte für Meldungen | Notfallnummer, E-Mail, Videokonferenz (Plattform, https-Link, Konferenz-ID/PIN). Für alle Beschäftigten sichtbar, sobald einer Meldung zugeordnet |
 | Betreff-Präfixe | Präfix der ALARM-Mail für "Neuer Alarm", "Aktualisierung" und "Ende", z. B. `[ALARM]` |
 | Kopie-Adresse | `cc_default_mail1` ändern (Erinnerungen, Kopie der ALARM-Mails, Audit-Anker) |
-| Zugangspasswort für alle | Stufe 1 wechseln; gilt sofort für neue Anmeldungen. Danach intern bekannt geben |
+| Gemeinsamer Zugang für alle | Benutzername (z. B. "Unternehmen") und Zugangspasswort (Stufe 1) ändern; gilt sofort für neue Anmeldungen. Danach intern bekannt geben. Der Name darf keiner persönlichen Kennung gleichen |
 | Mailversand testen | Testmail an Ihre eigene Adresse |
 | Anmeldungen je Tag | 30 Tage, Stufe 1 / Stufe 2 / Fehlversuche |
 

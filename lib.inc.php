@@ -753,6 +753,44 @@ function stage1_change(string $pw, string $pw2, string $actor, array $how = []):
     return [];
 }
 
+/** Benutzername des gemeinsamen Zugangs (Stufe 1), z. B. "Unternehmen". Vergleich ohne Groß-/Kleinschreibung. */
+function stage1_user(): string
+{
+    $v = setting_get('stage1_user');
+    return is_string($v) && $v !== '' ? $v : (string)cfg('auth.stage1_user', 'zugang');
+}
+
+function login_name_key(string $name): string
+{
+    return mb_strtolower(trim($name));
+}
+
+/** Prüft einen Benutzernamen für den gemeinsamen Zugang. Rückgabe: Fehlermeldung oder null. */
+function stage1_user_check(string $name): ?string
+{
+    $name = trim($name);
+    if (!preg_match('/^[\p{L}0-9._-]{2,40}$/u', $name)) {
+        return 'Benutzername für den gemeinsamen Zugang: 2 bis 40 Zeichen, Buchstaben, Ziffern, Punkt, _ und - (keine Leerzeichen).';
+    }
+    if (isset(users()[login_name_key($name)])) {
+        return 'Diesen Namen trägt bereits ein persönlicher Zugang. Bitte einen anderen Namen wählen.';
+    }
+    return null;
+}
+
+function stage1_user_change(string $name, string $actor, array $how = []): ?string
+{
+    if ($err = stage1_user_check($name)) {
+        return $err;
+    }
+    $name = trim($name);
+    tx(function () use ($name, $actor, $how) {
+        setting_set('stage1_user', $name);
+        audit('setting.stage1_user', 'stage1', ['how' => $how], $actor, setting_level($actor));
+    });
+    return null;
+}
+
 /** ALARM-Empfänger der Version 1.2 aus dem Browser (werden beim ersten Speichern der Alarmkreise übernommen). */
 function recipients_web(): array
 {
@@ -1533,6 +1571,9 @@ function account_action(string $action, string $id, array $in, string $actor, ar
     if (!preg_match('/^[a-z0-9_-]{2,32}$/', $id)) {
         throw new InvalidArgumentException('Benutzerkennung ungültig (2–32 Zeichen a–z, 0–9, _ und -)');
     }
+    if ($action === 'create' && $id === login_name_key(stage1_user())) {
+        throw new InvalidArgumentException('Diese Kennung ist der Benutzername des gemeinsamen Zugangs. Bitte eine andere Kennung wählen.');
+    }
     $level = str_starts_with($actor, 'system:') ? 0 : 2;
     try {
         return tx(fn() => account_action_tx($action, $id, $in, $actor, $how, $level));
@@ -1879,7 +1920,7 @@ function audit_describe(string $action, array $d): string
         'user.set_pw' => 'Passwort geändert', 'user.reset_totp' => 'TOTP zurückgesetzt', 'user.set_totp' => 'TOTP gekoppelt',
         'user.disable' => 'Benutzer deaktiviert', 'user.enable' => 'Benutzer aktiviert', 'user.role' => 'Rolle geändert',
         'system.install' => 'Einrichtung abgeschlossen (install.php)', 'system.cron_manual' => 'Cron manuell ausgeführt',
-        'setting.stage1' => 'Zugangspasswort Stufe 1 geändert', 'setting.cc1' => 'Kopie-Adresse (cc_default_mail1) geändert',
+        'setting.stage1' => 'Zugangspasswort Stufe 1 geändert', 'setting.stage1_user' => 'Benutzername des gemeinsamen Zugangs geändert', 'setting.cc1' => 'Kopie-Adresse (cc_default_mail1) geändert',
         'setting.recipient_add' => 'ALARM-Empfänger hinzugefügt', 'setting.recipient_remove' => 'ALARM-Empfänger entfernt',
         'mail.test' => 'Testmail versendet',
         'setting.circle_create' => 'Alarmkreis angelegt', 'setting.circle_update' => 'Alarmkreis geändert', 'setting.circle_delete' => 'Alarmkreis gelöscht',
@@ -2984,7 +3025,7 @@ function system_check(): array
             $chk(false, "Benutzer $id: Authenticator-App noch nicht gekoppelt (passiert beim ersten Login)");
         }
     }
-    foreach ($dbOk && $keyOk ? ['stage1', 'recipients', 'cc1', 'circles', 'locations', 'contacts', 'mail_prefix'] : [] as $k) {
+    foreach ($dbOk && $keyOk ? ['stage1', 'stage1_user', 'recipients', 'cc1', 'circles', 'locations', 'contacts', 'mail_prefix'] : [] as $k) {
         if (setting_broken($k)) {
             $chk(false, "Einstellung $k nicht lesbar – Datenbank verändert oder falscher Master-Key");
         }

@@ -18,7 +18,8 @@ erreichbar, wenn Netzwerk, Telefon oder Mail im Haus gestört sind.
 
 ## Was es kann
 
-* **Zwei Stufen:** gemeinsames Zugangspasswort zum Lesen, persönlicher Login zum Ändern.
+* **Ein Anmeldeformular, zwei Stufen:** gemeinsamer Benutzername + Zugangspasswort zum Lesen, persönliche Kennung zum
+  Ändern (kritische Änderungen zusätzlich mit TOTP).
 * **Keine Falschmeldungen:** nur freigegebene, pressetaugliche Textbausteine; immer Vorschau → verbindlich setzen;
   TOTP-Bestätigung bei ALARM-Mail und kritischen Status; kritische Begriffe ("Ausfall", "Angriff", …) werden
   blockiert.
@@ -68,7 +69,7 @@ Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-install
 
 | Datei | Zweck |
 |---|---|
-| `index.php` | Login Stufe 1 (gemeinsames Zugangspasswort) |
+| `index.php` | Anmeldung: gemeinsamer Zugang (nur Lesen) oder persönliche Kennung (mit Einstellungen) |
 | `status.php` | aktueller Status |
 | `change.php` | Login Stufe 2, Meldungen setzen, verlängern, ändern, beenden (Formular → Vorschau → verbindlich), Verlauf, Protokoll, Nutzung, eigenes Passwort |
 | `admin.php` | Benutzerverwaltung (nur Admins) |

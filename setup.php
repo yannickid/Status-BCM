@@ -5,6 +5,7 @@
  *
  *   php setup.php init                          Master-Key + Cron-Token erzeugen (config.local.inc.php)
  *   php setup.php set-stage1                    Zugangspasswort Stufe 1 setzen
+ *   php setup.php set-stage1-user <name>        Benutzername des gemeinsamen Zugangs
  *   php setup.php add-user <id> "<Name>" <mail> [admin|editor] [--config]
  *                                               Benutzer Stufe 2 anlegen (Passwort + TOTP-Secret), Standard: admin.
  *                                               --config: in config.local.inc.php statt in die DB (Webspace ohne SSH:
@@ -115,6 +116,13 @@ switch ($cmd) {
             fail(implode(' ', $e));
         }
         out('Zugangspasswort Stufe 1 gesetzt (verschlüsselt in der Datenbank, wie über System im Browser).');
+        break;
+
+    case 'set-stage1-user':
+        if ($e = stage1_user_change((string)($args[0] ?? ''), 'system:cli')) {
+            fail($e);
+        }
+        out('Benutzername des gemeinsamen Zugangs: ' . stage1_user());
         break;
 
     case 'add-user':

@@ -53,7 +53,7 @@ try {
 
     /* --- Öffentliche Seite / Crawlerschutz --- */
     [$c, $h, $b] = req('GET', "$base/index.php", [], $jar);
-    ok($c === 200 && str_contains($b, 'Zugangspasswort'), 'index.php zeigt Login Stufe 1');
+    ok($c === 200 && str_contains($b, 'Benutzername') && str_contains($b, 'Passwort'), 'index.php zeigt das Anmeldeformular');
     ok(str_contains($h['x-robots-tag'] ?? '', 'noindex') && str_contains($b, 'name="robots" content="noindex'), 'noindex per Header und Meta');
     $csp = $h['content-security-policy'] ?? '';
     ok(str_contains($csp, "default-src 'none'") && !str_contains($csp, 'script-src') && !str_contains($b, '<script'),
@@ -85,12 +85,27 @@ try {
     $t = csrf($b);
     [$c] = req('POST', "$base/index.php", ['password' => 'zugang-1234'], $jar);
     ok($c === 400, 'POST ohne CSRF-Token abgelehnt');
-    [$c, , $b] = req('POST', "$base/index.php", ['_csrf' => $t, 'action' => 'login', 'password' => 'falsch'], $jar);
+    [$c, , $b] = req('POST', "$base/index.php", ['_csrf' => $t, 'action' => 'login', 'user' => 'zugang', 'password' => 'falsch'], $jar);
     ok($c === 200 && str_contains($b, 'Anmeldung fehlgeschlagen'), 'Falsches Zugangspasswort abgelehnt');
-    [$c, , $b] = req('POST', "$base/index.php", ['_csrf' => $t, 'action' => 'login', 'password' => 'zugang-1234', 'website' => 'http://spam'], $jar);
+    [$c, , $b] = req('POST', "$base/index.php", ['_csrf' => $t, 'action' => 'login', 'user' => 'zugang', 'password' => 'zugang-1234', 'website' => 'http://spam'], $jar);
     ok(str_contains($b, 'Anmeldung fehlgeschlagen'), 'Honeypot-Feld blockiert Bots');
-    [$c, $h] = req('POST', "$base/index.php", ['_csrf' => $t, 'action' => 'login', 'password' => 'zugang-1234'], $jar);
+    [$c, $h] = req('POST', "$base/index.php", ['_csrf' => $t, 'action' => 'login', 'user' => 'zugang', 'password' => 'zugang-1234'], $jar);
     ok($c === 302 && ($h['location'] ?? '') === 'status.php', 'Login Stufe 1 erfolgreich');
+    $jarU = $tmp . '/jarU.txt';
+    [, , $b] = req('GET', "$base/index.php", [], $jarU);
+    ok(str_contains($b, 'name="user"') && str_contains($b, 'name="password"'), 'Startseite: ein Formular mit Benutzername und Passwort');
+    $tU = csrf($b);
+    [$c, , $b] = req('POST', "$base/index.php", ['_csrf' => $tU, 'action' => 'login', 'user' => 'anna', 'password' => 'zugang-1234'], $jarU);
+    ok($c === 200 && str_contains($b, 'Anmeldung fehlgeschlagen'), 'Zugangspasswort mit persönlicher Kennung abgelehnt');
+    [$c, $h] = req('POST', "$base/index.php", ['_csrf' => $tU, 'action' => 'login', 'user' => ' Zugang ', 'password' => 'zugang-1234'], $jarU);
+    [, , $b] = req('GET', "$base/change.php", [], $jarU);
+    ok($c === 302 && str_contains($b, 'Anmeldung Stufe 2'), 'Gemeinsamer Zugang (Groß-/Kleinschreibung egal) führt nur zum Lesen');
+    $jarA = $tmp . '/jarA.txt';
+    [, , $b] = req('GET', "$base/index.php", [], $jarA);
+    [$c, $h] = req('POST', "$base/index.php", ['_csrf' => csrf($b), 'action' => 'login', 'user' => 'Anna', 'password' => 'anna-passwort'], $jarA);
+    [, , $b] = req('GET', "$base/change.php", [], $jarA);
+    ok($c === 302 && ($h['location'] ?? '') === 'status.php' && str_contains($b, 'Neue Meldung') && str_contains($b, 'Angemeldet als Anna Test'),
+        'Persönliche Kennung auf der Startseite: direkt mit Einstellungen angemeldet');
     [$c, , $b] = req('GET', "$base/status.php", [], $jar);
     ok($c === 200 && str_contains($b, 'Regelbetrieb'), 'status.php zeigt Regelbetrieb');
 
@@ -122,7 +137,7 @@ try {
     $pid = $m[1] ?? '';
     $jar2 = $tmp . '/jar2.txt';
     [, , $b2] = req('GET', "$base/index.php", [], $jar2);
-    req('POST', "$base/index.php", ['_csrf' => csrf($b2), 'action' => 'login', 'password' => 'zugang-1234'], $jar2);
+    req('POST', "$base/index.php", ['_csrf' => csrf($b2), 'action' => 'login', 'user' => 'zugang', 'password' => 'zugang-1234'], $jar2);
     [, , $b2] = req('GET', "$base/status.php", [], $jar2);
     ok(str_contains($b2, 'Regelbetrieb'), 'Vor dem Bestätigen gilt weiter der alte Status');
 
@@ -144,7 +159,7 @@ try {
     req('GET', "$base/status.php", [], $jar2);
     [, , $b] = req('GET', "$base/change.php", [], $jar);
     ok(str_contains($b, 'gelesen: 1'), 'Lesezähler zählt den Aufruf einmal je Sitzung');
-    ok(preg_match('#Stufe 1 \(gemeinsames Passwort\)</td><td class="text-end">2</td>#', $b) === 1, 'Nutzung zeigt Anmeldungen Stufe 1');
+    ok(preg_match('#Stufe 1 \(gemeinsames Passwort\)</td><td class="text-end">3</td>#', $b) === 1, 'Nutzung zeigt Anmeldungen Stufe 1');
     ok(str_contains($b, 'Stufe 2: Anna Test'), 'Nutzung zeigt Anmeldungen Stufe 2 je Benutzer');
     ok(!preg_match('/<style|style="/', $b), 'Auch Stufe 2 ohne Inline-Styles');
 
@@ -201,7 +216,7 @@ try {
     $jar4 = $tmp . '/jar4.txt';
     [, , $b] = req('GET', "$base/index.php", [], $jar4);
     $t4 = csrf($b);
-    req('POST', "$base/index.php", ['_csrf' => $t4, 'action' => 'login', 'password' => 'zugang-1234'], $jar4);
+    req('POST', "$base/index.php", ['_csrf' => $t4, 'action' => 'login', 'user' => 'zugang', 'password' => 'zugang-1234'], $jar4);
     [, , $b] = req('GET', "$base/change.php", [], $jar4);
     $t4 = csrf($b);
     [$c] = req('POST', "$base/change.php", ['_csrf' => $t4, 'action' => 'login2', 'user' => 'carla', 'password' => $once], $jar4);
@@ -283,9 +298,9 @@ try {
     [, , $b] = req('GET', "$base/index.php", [], $jar3);
     $t3 = csrf($b);
     for ($i = 0; $i < 4; $i++) {
-        req('POST', "$base/index.php", ['_csrf' => $t3, 'action' => 'login', 'password' => 'falsch' . $i], $jar3);
+        req('POST', "$base/index.php", ['_csrf' => $t3, 'action' => 'login', 'user' => 'zugang', 'password' => 'falsch' . $i], $jar3);
     }
-    [, , $b] = req('POST', "$base/index.php", ['_csrf' => $t3, 'action' => 'login', 'password' => 'zugang-1234'], $jar3);
+    [, , $b] = req('POST', "$base/index.php", ['_csrf' => $t3, 'action' => 'login', 'user' => 'zugang', 'password' => 'zugang-1234'], $jar3);
     ok(str_contains($b, 'Zu viele Versuche'), 'Brute-Force-Sperre greift auch für das richtige Passwort');
 
     $log = (string)@file_get_contents($tmp . '/server.log');
