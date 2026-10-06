@@ -20,10 +20,17 @@
 
 ## Für die Redaktion: Meldungen setzen
 
-Auf der Startseite mit der **persönlichen Kennung** und dem eigenen Passwort anmelden. Sie sehen dann die
-Statusseite und zusätzlich das Menü **Einstellungen**, ohne zweites Anmeldeformular. Wer bereits mit dem gemeinsamen
-Zugang angemeldet ist, kann sich auch unter **Einstellungen** persönlich anmelden. Kritische Änderungen (ALARM-Mail,
-kritische Meldungen, Benutzer, System) verlangen weiterhin den TOTP-Code aus der App.
+Auf der Startseite mit der **persönlichen Kennung** und dem eigenen Passwort anmelden. Danach fragt die Seite den
+**6-stelligen Code aus der Authenticator-App** ab. Erst dann sehen Sie die Statusseite und zusätzlich das Menü
+**Einstellungen**. Wer bereits mit dem gemeinsamen Zugang angemeldet ist, kann sich auch unter **Einstellungen**
+persönlich anmelden (ebenfalls mit Code). Der gemeinsame Lesezugang braucht keinen Code.
+
+Warum schon beim Login: Mit der persönlichen Kennung sieht man Protokoll, IP-Adressen und interne Notizen. Ein
+abgefischtes Passwort allein reicht dafür nicht mehr.
+
+Kritische Änderungen (ALARM-Mail, Setzen und Beenden von Meldungen der Stufen "Hinweis" und "Wichtiger Hinweis",
+Benutzer, System) verlangen zusätzlich je Aktion einen Code. Ein Code gilt nur einmal: Direkt nach dem Login warten
+Sie für die erste kritische Änderung auf den nächsten Code der App (höchstens 30 Sekunden).
 
 ### Erster Login
 
@@ -47,14 +54,16 @@ Mehrere Meldungen können gleichzeitig gelten. Eine neue Meldung ersetzt keine b
 4. **Gültigkeit** festlegen: eine **Dauer** (1 Stunde … 2 Tage) **oder** "Gültig bis" (Datum und Uhrzeit).
 5. Optional **ALARM-Mail senden** und die **Alarmkreise** wählen (z. B. IT, BOA/Krisenstab, Leitung). "Standortverwaltung
    der betroffenen Standorte" ist vorausgewählt; ohne Standortliste sind das alle Standortverwaltungen. Die Mail geht
-   per BCC an diese Adressen, an Sie und an die Kopie-Adresse.
+   per BCC an diese Adressen, an Sie und an die Kopie-Adresse. Sind für einen Kreis **Signal**-Empfänger oder ein
+   **GroupAlarm**-Szenario hinterlegt, geht die Meldung zusätzlich dorthin (die Vorschau nennt das).
 6. Optional eine **interne Notiz** (Anlass). Sie steht nur im Protokoll, nie auf der Statusseite.
 7. **Vorschau**: Prüfen Sie die Meldung genau so, wie alle sie sehen werden. Bei ALARM-Mail stehen dort Betreff-Präfix,
    Zahl der Empfänger und die gewählten Kreise.
 8. Bei ALARM-Mail oder kritischen Status den **TOTP-Code** aus der App eingeben.
 9. **Verbindlich setzen**. Erst jetzt ändert sich die Statusseite. Mit **Abbrechen** verwerfen Sie die Änderung.
 
-Die Rückmeldung zeigt, an wie viele Adressen die ALARM-Mail zugestellt wurde. Bei Fehlern erscheint ein Hinweis.
+Die Rückmeldung zeigt, an wie viele Adressen die ALARM-Mail zugestellt wurde und wie Signal bzw. GroupAlarm
+geantwortet haben. Bei Fehlern erscheint ein Hinweis.
 
 ### Verlängern, ändern oder beenden
 
@@ -62,8 +71,10 @@ Unter **Aktuelle Meldungen** steht jede offene Meldung mit ihren eigenen Schaltf
 
 * **Verlängern:** Dauer wählen → Vorschau → verbindlich setzen.
 * **Ändern:** Standorte, Kontakt, Gültigkeit anpassen, optional mit ALARM-Mail (Betreff-Präfix "Aktualisierung").
-* **Beenden (zurückgenommen / gelöst):** optional mit ALARM-Mail (Präfix "Ende") an die gewählten Kreise. Beenden ohne
-  ALARM-Mail braucht keinen TOTP-Code. Die Meldung bleibt 48 Stunden ausgegraut sichtbar.
+* **Beenden (zurückgenommen / gelöst):** optional mit ALARM-Mail (Präfix "Ende") an die gewählten Kreise. Meldungen
+  der Stufen "Hinweis" und "Wichtiger Hinweis" (und Übungen) verlangen beim Beenden den TOTP-Code, genau wie beim
+  Setzen: Eine still beendete echte Warnung wirkt wie eine Entwarnung. "Information" lässt sich ohne Code beenden.
+  Die Meldung bleibt 48 Stunden ausgegraut sichtbar.
 
 Läuft die Gültigkeit ab, erhalten Sie (und `cc_default_mail1`) eine **Erinnerungsmail**. Sie wird stündlich
 wiederholt, bis Sie verlängern oder beenden. Bis dahin steht die Meldung als "Nicht mehr gültig" ausgegraut auf der
@@ -91,6 +102,15 @@ Tageswerte der letzten 30 Tage zeigt Admins die Seite **System**.
 
 **Einstellungen → Änderungsprotokoll** zeigt die letzten 30 Einträge (wer, wann, was, wie) und oben das Ergebnis
 der Integritätsprüfung. "FEHLER" bedeutet: Das Protokoll wurde verändert. In diesem Fall sofort die ISB informieren.
+Das vollständige Protokoll exportieren Admins unter **System → Protokoll-Export** (siehe unten).
+
+### Aushang drucken
+
+**Einstellungen → Aushang mit QR-Code drucken** (bzw. **System**) erzeugt eine A4-Seite für Schwarze Bretter und den
+Notfallordner: Titel, QR-Code und Adresse der Statusseite, eine kurze Anleitung. Optional kommen der Benutzername des
+gemeinsamen Zugangs, ausgewählte Notfallrufnummern und ein eigener Hinweis dazu ("Passwort: siehe Notfallordner,
+Register 1"). **Das Zugangspasswort wird nie gedruckt.** Drucken über das Browser-Menü (Strg+P bzw. Teilen → Drucken);
+Menü und Formular erscheinen nicht im Ausdruck. Der QR-Code wird auf dem Server erzeugt, ohne fremden Dienst.
 
 ## Benutzerverwaltung (Admins)
 
@@ -121,13 +141,15 @@ Menü **System** (nur Admins). Änderungen verlangen Ihren TOTP-Code und stehen 
 | Bereich | Inhalt |
 |---|---|
 | Prüfung | alle Punkte von Konfiguration, Datenbank, Benutzern, Empfängern, Cron, Protokoll-Kette (mit Kopf-Hash) und Meldungstexten. "offen" heißt: bitte ansehen |
-| Cron | die Adresse für den Cronjob beim Hoster und "Jetzt einmal ausführen" |
-| Alarmkreise | Kreise wie IT, BOA/Krisenstab, Leitung anlegen oder löschen; Adressen hinzufügen (eine je Zeile) oder per Haken entfernen. Sichtbar nur maskiert |
+| Cron | die Adresse für den Cronjob beim Hoster, "Jetzt einmal ausführen", letzter Lauf und die Adresse für einen externen Uptime-Check (`health.php`) |
+| Alarmkreise | Kreise wie IT, BOA/Krisenstab, Leitung anlegen oder löschen; Adressen hinzufügen (eine je Zeile) oder per Haken entfernen. Sichtbar nur maskiert. Je Kreis unter "Signal und GroupAlarm": Signal-Rufnummern (`+49…`) oder Signal-Gruppen (`group.…`) und eine GroupAlarm-Szenario-ID, dazu eine Signal-Testnachricht |
 | Standorte | Name, Durchwahl und **E-Mail der Standortverwaltung** je Außenstelle. Name und Durchwahl erscheinen auf der Statusseite, die Adressen nie (nur maskiert unter System) |
 | Kontakte für Meldungen | Notfallnummer, E-Mail, Videokonferenz (Plattform, https-Link, Konferenz-ID/PIN). Für alle Beschäftigten sichtbar, sobald einer Meldung zugeordnet |
 | Betreff-Präfixe | Präfix der ALARM-Mail für "Neuer Alarm", "Aktualisierung" und "Ende", z. B. `[ALARM]` |
 | Kopie-Adresse | `cc_default_mail1` ändern (Erinnerungen, Kopie der ALARM-Mails, Audit-Anker) |
 | Gemeinsamer Zugang für alle | Benutzername (z. B. "Unternehmen") und Zugangspasswort (Stufe 1) ändern; gilt sofort für neue Anmeldungen. Danach intern bekannt geben. Der Name darf keiner persönlichen Kennung gleichen |
+| Protokoll-Export | Änderungsprotokoll als **CSV** (Excel, Revision) oder **PDF** (Ablage, ISB), wahlweise für einen Zeitraum und mit oder ohne IP-Adressen. Kopf mit Integritätsprüfung und Kopf-Hash; jeder Export steht selbst im Protokoll |
+| Aushang | Link zur Druckvorlage mit QR-Code |
 | Mailversand testen | Testmail an Ihre eigene Adresse |
 | Anmeldungen je Tag | 30 Tage, Stufe 1 / Stufe 2 / Fehlversuche |
 
@@ -138,7 +160,7 @@ Hat der einzige Admin Passwort und Smartphone verloren, hilft der Notfallzugang,
 
 ```
 STATUS-BCM – KURZKARTE
-1. Einstellungen → persönlich anmelden
+1. Startseite: persönliche Kennung + Passwort + Code aus der App
 2. Neue Meldung: Status + ggf. Standorte + Kontakt + Dauer
 3. ALARM-Mail? nur die nötigen Alarmkreise wählen
 4. Vorschau prüfen → TOTP-Code → Verbindlich setzen

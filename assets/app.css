@@ -38,3 +38,24 @@
 @media print{
   .no-print,header nav,header form{display:none!important}
 }
+
+/* Aushang (aushang.php): Druckvorlage A4 */
+.aushang{max-width:40rem;margin:0 auto}
+.aushang-kicker{text-transform:uppercase;letter-spacing:.08em;font-weight:600;margin-bottom:.25rem}
+.aushang-title{font-size:2rem;font-weight:800;margin-bottom:.5rem}
+.aushang-lead{font-size:1.1rem}
+.aushang-qr{width:min(80vw,20rem);height:auto;margin:1rem auto;display:block}
+.aushang-url{font-size:1.2rem;font-weight:700;font-family:var(--bs-font-monospace)}
+.aushang-steps{font-size:1.05rem;max-width:32rem;margin:1rem auto}
+.aushang-contacts{max-width:32rem;margin:1rem auto;padding:.75rem 1rem;border:2px solid #000;border-radius:.25rem}
+.aushang-note{font-weight:600;margin-top:1rem}
+.aushang-foot{font-size:.8rem;color:var(--bs-secondary-color);margin:1.5rem 0 0}
+@media print{
+  @page{size:A4 portrait;margin:15mm}
+  body{background:#fff!important;color:#000!important}
+  .app-wrap{max-width:none;padding:0!important}
+  .aushang{border:0!important;box-shadow:none!important;max-width:none}
+  .aushang-title{font-size:30pt}
+  .aushang-qr{width:90mm}
+  .aushang-steps,.aushang-lead{font-size:14pt}
+}

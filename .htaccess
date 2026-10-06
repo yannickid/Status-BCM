@@ -5,7 +5,7 @@ Options -Indexes
 DirectoryIndex index.php
 
 # Interne Dateien niemals ausliefern
-<FilesMatch "^(config\.inc\.php|config\.local\.inc\.php(\.tmp)?|lib\.inc\.php|qr\.inc\.php|setup\.php|config\.json|README\.md|\.gitignore)$">
+<FilesMatch "^(config\.inc\.php|config\.local\.inc\.php(\.tmp)?|lib\.inc\.php|qr\.inc\.php|pdf\.inc\.php|setup\.php|config\.json|README\.md|\.gitignore)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>

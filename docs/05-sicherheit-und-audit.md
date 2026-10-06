@@ -9,7 +9,10 @@ Sie ist als Grundlage für ein Audit oder eine Sicherheitskonzeption gedacht.
 > Hosting-Vertrag, Datensicherung. Die Tabellen unten zeigen, was die Software technisch abdeckt und was organisatorisch
 > beim Betreiber bleibt (Spalte "Betreiber").
 
-Stand: Version 1.1 · Verantwortlich für die Pflege dieser Datei: Informationssicherheitsbeauftragte/r (ISB)
+Ergänzend: [Governance](06-governance.md) (Strukturanalyse, Schutzbedarfsfeststellung, IT-Sicherheitskonzept,
+Risikoanalyse, Datenschutz) und [Abschnitt 11](#11-transparenz-wo-was-wie-gespeichert-ist) (wo was wie gespeichert ist).
+
+Stand: Version 1.4 · Verantwortlich für die Pflege dieser Datei: Informationssicherheitsbeauftragte/r (ISB)
 
 ---
 
@@ -52,12 +55,16 @@ flowchart LR
   C --> L
   L -- PDO --> D[(MySQL/MariaDB<br>verschlüsselte Nutzdaten,<br>Audit-Hash-Kette)]
   L -- SMTP STARTTLS/SSL --> M[Mailserver] -- BCC --> E[Alarmkreise und Standortverwaltungen]
+  L -- HTTPS + Token --> S[eigenes Signal-Gateway<br>signal-cli-rest-api] --> E
+  L -- HTTPS + Token --> G[GroupAlarm] --> E
   K[Cron CLI oder URL+Token] --> L
+  U[externer Uptime-Check] -- HTTPS --> H[health.php] --> L
   F[config.local.inc.php<br>Master-Key, Hashes] -. nur lesend .-> L
   J[config.json<br>freigegebene Texte] -. nur lesend .-> L
 ```
 
-**Vertrauensgrenzen:** Browser ↔ Webspace (HTTPS), Webspace ↔ Datenbank, Webspace ↔ Mailserver. Die Schlüssel liegen
+**Vertrauensgrenzen:** Browser ↔ Webspace (HTTPS), Webspace ↔ Datenbank, Webspace ↔ Mailserver, Webspace ↔
+Signal-Gateway und GroupAlarm. Die Schlüssel liegen
 in einer Datei (`config.local.inc.php`), nicht in der Datenbank. Im Browser gepflegte Einstellungen (Zugangspasswort,
 Empfänger, Kopie-Adresse) liegen zwar in der Datenbank, aber mit AES-GCM verschlüsselt und an ihren Namen gebunden. Wer nur die Datenbank kontrolliert, kann deshalb
 nichts unbemerkt fälschen (Abschnitt 5.4).
@@ -67,8 +74,8 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 | Rolle | Anmeldung | Darf |
 |---|---|---|
 | Beschäftigte | Stufe 1: gemeinsamer Benutzername + Zugangspasswort | Aktuellen Status lesen |
-| Redaktion (`editor`) | persönliche Kennung + Passwort im selben Formular (gilt als Stufe 1 + 2) | Status setzen, verlängern, beenden; ALARM-Mail auslösen (mit TOTP); Verlauf, Protokoll und Nutzung einsehen; eigenes Passwort ändern |
-| Admin (`admin`) | wie Redaktion | zusätzlich Benutzerverwaltung (`admin.php`): anlegen, Passwort/TOTP zurücksetzen, Rolle ändern, (de)aktivieren; System (`system.php`): Benutzername und Zugangspasswort Stufe 1, Alarmkreise, Standorte mit Adressen der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse; Änderungen jeweils mit TOTP; Prüfung, Cron-Adresse, Testmail |
+| Redaktion (`editor`) | persönliche Kennung + Passwort im selben Formular, danach TOTP-Code (gilt als Stufe 1 + 2) | Status setzen, verlängern, beenden; ALARM-Mail auslösen (mit TOTP); Verlauf, Protokoll und Nutzung einsehen; eigenes Passwort ändern |
+| Admin (`admin`) | wie Redaktion | zusätzlich Benutzerverwaltung (`admin.php`): anlegen, Passwort/TOTP zurücksetzen, Rolle ändern, (de)aktivieren; System (`system.php`): Benutzername und Zugangspasswort Stufe 1, Alarmkreise mit Signal-Empfängern und GroupAlarm-Szenario, Standorte mit Adressen der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse; Änderungen jeweils mit TOTP; Prüfung, Cron-Adresse, Testmail, Protokoll-Export |
 | Betrieb (FTP, optional Shell) | Zugang zum Webspace | Ersteinrichtung (`install.php` mit Einrichtungscode aus `storage/`), `config.json` und `config.local.inc.php` pflegen, Sicherung; optional `setup.php` |
 
 * **Need-to-know:** Empfängeradressen sieht niemand in der Oberfläche, nur die Anzahl bzw. maskiert (`m****@e***.de`).
@@ -89,7 +96,7 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 | Passwortregeln | mind. 12 Zeichen (Länge vor Komplexität, Passphrasen erlaubt), nicht der Benutzername, mind. 6 verschiedene Zeichen, nicht gleich dem bisherigen. |
 | Passwort-Gültigkeit | konfigurierbar (`auth.password_max_age_days`, Standard 365 Tage). Erinnerung per Mail vorher, wöchentlich wiederholt. Ein abgelaufenes Passwort sperrt **nicht** aus, erzwingt aber den sofortigen Wechsel. Eine Aussperrung im Ernstfall wäre ein BCM-Risiko. Das BSI verlangt keinen regelmäßigen Zwangswechsel; ein Wert von 0 schaltet den Ablauf ab. |
 | Ersteinrichtung | Neue Benutzer erhalten ein Einmalpasswort (einmalig angezeigt, persönlich zu übergeben). Beim ersten Login werden ein eigenes Passwort und die Authenticator-App eingerichtet. Admins sehen das TOTP-Secret nie. |
-| Zweiter Faktor | TOTP nach RFC 6238 (Authenticator-App, ohne SMS/Mail), ±30 s Toleranz, **Replay-Schutz** (jeder Zeitschritt nur einmal je Benutzer). Pflicht bei ALARM-Mail, bei Status mit `require_totp` und bei jeder Admin-Aktion; optional für alle Änderungen (`auth.totp_enforce_all`). |
+| Zweiter Faktor | TOTP nach RFC 6238 (Authenticator-App, ohne SMS/Mail), ±30 s Toleranz, **Replay-Schutz** (jeder Zeitschritt nur einmal je Benutzer). **Beim Login mit persönlicher Kennung Pflicht** (`auth.totp_at_login`), weil die Kennung Protokoll, IP-Adressen und interne Notizen öffnet; der gemeinsame Lesezugang bleibt ohne TOTP. Zusätzlich je Aktion Pflicht bei ALARM-Mail, beim **Setzen und Beenden** von Status mit `require_totp` (Stufen "Hinweis", "Wichtiger Hinweis", Übung; eine still beendete Warnung wirkt wie eine Entwarnung) und bei jeder Admin-Aktion; optional für alle Änderungen (`auth.totp_enforce_all`). Nach Passwort ohne TOTP-Code entsteht keine Sitzung; der Zwischenschritt verfällt nach 5 Minuten oder 5 falschen Codes. |
 | Brute-Force-Schutz | Fehlversuche je IP und je Benutzer (Standard 5 bzw. 10 in 15 Min.), verzögerte Fehlantworten, Honeypot-Feld. Gilt getrennt für Stufe 1, Stufe 2, TOTP und den Cron-Token; im gemeinsamen Anmeldeformular zählt ein Fehlversuch mit persönlicher Kennung für die IP-Sperre und die Sperre der Kennung. Die Fehlermeldung verrät nicht, ob ein Name existiert. |
 | Sitzungen | Cookie `HttpOnly`, `SameSite=Strict`, `Secure` (bei HTTPS); neue Session-ID bei jedem Login; Leerlauf-Timeout 30 Min. (Stufe 1) bzw. 15 Min. (Stufe 2); harte Obergrenze 10 h; Strict Mode. |
 | Deaktivierung | wirkt sofort, auch für bestehende Sitzungen. Es muss immer mindestens ein aktiver Admin bleiben. |
@@ -144,7 +151,9 @@ nicht mehr lesbar. Ein Schlüsselwechsel ist nur bei einer Neuinstallation vorge
 | Meldung gesetzt / verlängert / geändert / beendet / automatisch beendet | `status.set`, `status.extend`, `status.update`, `status.end`, `status.auto_end` (Meldungsnummer, vorher → nachher, Standorte, Kontakte, Gültigkeit, ALARM ja/nein, TOTP ja/nein, interne Notiz) |
 | Mails | `mail.alarm` (Art neu/Aktualisierung/Ende, gewählte Kreise, Anzahl Standortadressen), `mail.reminder`, `mail.autorevert`, `mail.pw_reminder`, `mail.anchor` (nur Anzahl erfolgreich/fehlgeschlagen) |
 | Benutzerverwaltung | `user.create`, `user.reset_pw`, `user.set_pw`, `user.reset_totp`, `user.set_totp`, `user.role`, `user.disable`, `user.enable` |
-| Einrichtung und System | `system.install`, `setting.stage1`, `setting.cc1`, `setting.circle_create/update/delete`, `setting.location_create/update/delete`, `setting.contact_create/update/delete`, `setting.mail_prefix` (Adressen nur maskiert), `system.cron_manual`, `mail.test` |
+| Einrichtung und System | `system.install`, `setting.stage1`, `setting.cc1`, `setting.circle_create/update/delete`, `setting.circle_channels`, `setting.location_create/update/delete`, `setting.contact_create/update/delete`, `setting.mail_prefix` (Adressen und Nummern nur maskiert), `system.cron_manual`, `mail.test` |
+| Weitere Kanäle | `channel.alarm` (Art, je Kanal Anzahl erfolgreich/fehlgeschlagen, keine Nummern) |
+| Überwachung und Export | `monitor.cron_stale` (Warnmail bei Cron-Ausfall), `audit.export` (Format, Zeitraum, mit/ohne IP) |
 
 Jeder Eintrag enthält Zeitstempel (UTC), Akteur, Stufe (0 = System, 1, 2), Aktion und Objekt. Die verschlüsselten
 Details enthalten außerdem IP-Adresse, Browser und Skript bzw. bei CLI den Systembenutzer.
@@ -170,6 +179,11 @@ Details enthalten außerdem IP-Adresse, Browser und Skript bzw. bei CLI den Syst
 
 **Prüfen:** im Browser unter **System → Prüfung** oder **Einstellungen → Änderungsprotokoll**, per Kommandozeile
 `php setup.php verify-audit`. Alle prüfen die gesamte Kette.
+
+**Export:** **System → Protokoll-Export** liefert CSV (Trennzeichen `;`, UTF-8, gegen Formel-Injektion in Excel
+geschützt) oder PDF (A4 quer). Kopf: Ersteller, Zeitraum, Ergebnis der Kettenprüfung, Anzahl der Einträge und
+Kopf-Hash zum Zeitpunkt des Exports; die CSV enthält je Zeile zusätzlich den Hash des Eintrags. IP-Adressen nur auf
+ausdrückliche Wahl (Datensparsamkeit). Der Export selbst wird protokolliert, bevor die Datei entsteht.
 
 **Aufbewahrung:** Die Protokolle werden unbegrenzt aufbewahrt (append-only). *Betreiber:* Frist im Löschkonzept
 festlegen (Abschnitt 7). Eine Löschung ist nur durch die Datenbankadministration möglich und muss dokumentiert werden.
@@ -200,8 +214,14 @@ festlegen (Abschnitt 7). Eine Löschung ist nur durch die Datenbankadministratio
   ohne JavaScript und auch bei schlechter Mobilfunkverbindung.
 * Ein abgelaufenes Passwort sperrt niemanden aus. Für den Fall, dass der letzte Admin ausgesperrt ist, gibt es einen
   zweiten Admin (Empfehlung) oder den Notfallweg in [Betrieb](04-betrieb.md#notfälle-im-betrieb).
-* *Betreiber:* Rückfallweg ohne die Seite festlegen, die Erreichbarkeit überwachen (z. B. externer Uptime-Check auf
-  `index.php`) und die Seite in Notfallübungen nutzen.
+* **Selbstüberwachung:** Läuft der Cron länger als 15 Minuten nicht, erscheinen ein Hinweis für angemeldete
+  Redaktion/Admins und ein offener Punkt in der Prüfung; eine Warnmail geht an `cc_default_mail1` (höchstens
+  stündlich). `health.php` liefert externen Uptime-Diensten 200 `ok` oder 503 mit Grund (`db`, `cron`).
+* **Alarmierung ohne eigene Mail:** Signal (eigenes Gateway) und GroupAlarm je Alarmkreis.
+* **Aushang** mit QR-Code als Rückfallweg auf Papier (Adresse auch ohne Intranet auffindbar).
+* *Betreiber:* Rückfallweg ohne die Seite festlegen, einen externen Uptime-Check auf `health.php` einrichten (Alarm
+  außerhalb der eigenen Mail-Infrastruktur, siehe [Betrieb → Überwachung](04-betrieb.md#überwachung)) und die Seite in
+  Notfallübungen nutzen.
 
 ### 5.8 Datensicherung und Wiederherstellung (Bezug: CON.3 Datensicherungskonzept)
 
@@ -264,6 +284,12 @@ gegebenenfalls den Personal- bzw. Betriebsrat beteiligen.
 | Einrichtungsassistent vor der Einrichtung erreichbar | Ohne den Code aus `storage/` nutzlos. *Betreiber:* Einrichtung direkt nach dem Upload abschließen, danach `install.php` löschen. |
 | Datenbank-Angreifer löscht Browser-Einstellungen | Fälschen ist nicht möglich, Löschen schon: dann gelten die Werte aus `config.local.inc.php`. Die Prüfung meldet fehlende Empfänger, jede Änderung steht im Protokoll. |
 | Cron-Adresse wird bekannt | Erlaubt nur, Erinnerungen und Aufräumen auszulösen (gedrosselt). Optional `cron.ip_allowlist`; Token durch neuen Wert in `config.local.inc.php` ersetzen. |
+| Signal-Gateway kompromittiert oder ungeschützt | Ein offenes Gateway erlaubt Nachrichten unter Ihrer Nummer, ein kompromittiertes liest die Alarmtexte mit. Gegenmaßnahmen: Reverse-Proxy mit TLS und Token, nur `/v2/send` freigeben, Updates, eigener Server außerhalb der eigenen IT. Texte sind pressetauglich. |
+| Abhängigkeit von Signal/GroupAlarm | Beide sind Zusatzkanäle ohne Zustellgarantie; Fehler stehen in Rückmeldung und Protokoll. Telefonkette bleibt der Rückfallweg. |
+| Exportierte Protokolle | Liegen nach dem Download außerhalb der Anwendung. Gegenmaßnahmen: nur Admins, jeder Export protokolliert, IP-Adressen nur auf Wahl; *Betreiber:* verschlüsselte Ablage und Löschfrist. |
+| Cron fällt unbemerkt aus | Hinweis, Prüfung, Warnmail und `health.php`. Ruft niemand die Seite auf, meldet es nur der externe Uptime-Check. |
+| Phishing des persönlichen Passworts | Ohne den TOTP-Code entsteht keine Sitzung. Ein Echtzeit-Phishing (Code wird sofort weitergereicht) bleibt möglich; TOTP ist nicht phishing-resistent wie FIDO2. |
+| Sitzungsdateien beim Hoster | Unverschlüsselt im Sitzungsordner des Hosters (Abschnitt 11.2). Gegenmaßnahme: Hoster mit getrennten Sitzungsordnern je Kunde. |
 
 ## 9. Prüfanleitung für Auditoren
 
@@ -273,7 +299,8 @@ gegebenenfalls den Personal- bzw. Betriebsrat beteiligen.
 3. **Benutzer:** Seite **Benutzer** (oder `php setup.php list-users`). Erwartet werden Rollen, Passwortalter, Gültigkeit, gekoppelte TOTP und
    keine "INTEGRITÄTSFEHLER".
 4. **Änderungsnachweis:** In `change.php` → "Änderungsprotokoll" einen Statuswechsel nachvollziehen: wer, wann,
-   vorher → nachher, TOTP ja/nein, IP.
+   vorher → nachher, TOTP ja/nein, IP. Für die Akte: **System → Protokoll-Export (PDF)**; der Kopf-Hash im Export
+   muss zum Audit-Anker desselben Tages passen bzw. ihn fortsetzen.
 5. **Automatische Tests:** `php tests/selftest.php`, `php tests/webtest.php` und `php tests/installtest.php` (u. a. Manipulationserkennung,
    Replay-Schutz, BCC, CSRF, Brute-Force, Rollen).
 6. **Header:** `curl -sI https://<host>/index.php` → CSP, HSTS, `X-Robots-Tag`, `X-Frame-Options`.
@@ -296,3 +323,64 @@ gegebenenfalls den Personal- bzw. Betriebsrat beteiligen.
 | OPS.1.1.5 Protokollierung | 5.4 | Aufbewahrungsfrist, Auswertung der Anker |
 | OPS.2.3 Nutzung von Outsourcing | – | 5.10 |
 | DER.4 Notfallmanagement / BSI-Standard 200-4 | 1, 5.7 | Notfallhandbuch, Übungen, Rückfallweg |
+| SYS.1.1 / SYS.1.3 / SYS.1.6 (Server, Linux, Container) und OPS.2.2 Cloud-Nutzung | Abschnitt 11.3 | eigenes Signal-Gateway bzw. GroupAlarm, siehe [Governance](06-governance.md#3-modellierung) |
+
+Die vollständige Modellierung, Risikoanalyse und die Datenschutzunterlagen stehen in [Governance](06-governance.md).
+
+## 11. Transparenz: Wo was wie gespeichert ist
+
+Diese Übersicht zeigt jede Stelle, an der Status-BCM Daten ablegt oder weitergibt, wie sie geschützt sind und welches
+Risiko bleibt. Tabellennamen mit Standardpräfix `sbcm_`.
+
+**Schlüssel:** Alle Verschlüsselungen und MACs leiten ihre Schlüssel per HKDF-SHA-256 aus **einem** Master-Key ab
+(`security.master_key` in `config.local.inc.php`, 256 Bit). Jeder Zweck hat einen eigenen Teilschlüssel; jeder
+verschlüsselte Wert ist per AAD an seinen Ort gebunden (z. B. `audit:<Nr.>`, `setting:circles`), sodass sich Werte
+nicht unbemerkt vertauschen lassen. Verschlüsselt = AES-256-GCM (authentisiert: Änderungen fallen beim Entschlüsseln
+auf).
+
+### 11.1 Datenbank
+
+| Tabelle | Inhalt | Klartext (lesbar für DB-Admin/Hoster) | Geschützt | Löschung |
+|---|---|---|---|---|
+| `status` | jede Version jeder Meldung | Statusschlüssel, Stufe, Autor-Kennung, Zeitpunkte, ALARM ja/nein, Zustand, Meldungsnummer | **verschlüsselt:** Text, Standorte, Rufnummern, Kontakte, interne Notiz; **MAC** über die Zeile | nie (DB-Trigger verhindert `DELETE`) |
+| `audit` | Änderungsprotokoll | Nr., Zeit, Akteur-Kennung, Stufe, Aktion, Objekt | **verschlüsselt:** Details (vorher/nachher, IP, Browser, Notiz, maskierte Adressen); **HMAC-Hash-Kette** | nie (Trigger verhindert `UPDATE`/`DELETE`); Frist im Löschkonzept |
+| `mail_log` | versendete Mails | Zeit, Art, Anzahl Empfänger/zugestellt | **verschlüsselt:** Betreff, Text, Zustellergebnis mit **maskierten** Adressen | derzeit keine automatische Löschung |
+| `account` | Redaktion und Admins | Kennung, Anzeigename, Rolle, aktiv, Passwortdaten (Datum) | **bcrypt:** Passwort; **verschlüsselt:** E-Mail, TOTP-Secret; **MAC** über die Zeile | nie gelöscht, nur deaktiviert |
+| `kv` | im Browser gepflegte Einstellungen | Schlüsselnamen; Zeitpunkt letzter Cron-Lauf und letzte Warnmail | **verschlüsselt:** Alarmkreise (Mail-Adressen, Signal-Nummern, GroupAlarm-Szenario), Standorte mit Adressen der Standortverwaltung, Kontakte, Präfixe, Kopie-Adresse, Benutzername und Passwort-Hash (bcrypt) des gemeinsamen Zugangs | beim Entfernen unter **System** |
+| `login_attempt` | Fehlversuche (Brute-Force-Schutz) | Zeit, Bereich, ok ja/nein | IP und Benutzer nur als **HMAC-Pseudonym** | automatisch nach 2 Tagen |
+| `totp_used` | verbrauchte TOTP-Zeitschritte (Replay-Schutz) | Kennung, Zeitschritt | – (kein Geheimnis) | automatisch nach etwa 1 Stunde |
+| `view_count` | Lesezähler | Meldungs-ID, Tag, Anzahl | – (keine IP, keine Person) | derzeit keine automatische Löschung |
+
+### 11.2 Dateien auf dem Webspace
+
+| Datei | Inhalt | Schutz | Risiko |
+|---|---|---|---|
+| `config.local.inc.php` | **Master-Key**, DB-Zugang, SMTP-Zugang, Cron-Token, Zugangsdaten Signal-Gateway und GroupAlarm, optional `health_token` | Rechte 0600, `.htaccess`-Sperre, 403 bei Direktaufruf; Passwörter optional als `enc:v1:…` (schützt nur gegen Mitlesen der Datei ohne Key, da der Key in derselben Datei liegt) | **Kronjuwel.** Wer diese Datei hat, kann alles entschlüsseln und gültige Protokolleinträge erzeugen. |
+| `config.json` | freigegebene Meldungstexte, Start-Standorte, Mail-Vorlagen | schreibgeschützt (0444), `.htaccess` | Austausch ändert Texte; Nachweis über Git |
+| `storage/` | Einrichtungscode (bis zur Einrichtung), Fehlversuche des Assistenten, `notfall.txt` (nur während eines Notfallzugangs), `cron.lock`; im Testmodus `outbox/` | `.htaccess`, besser außerhalb des Webroots | `outbox/` enthält im Modus `log` Mails **im Klartext mit Empfängern**: im Echtbetrieb `mail.transport = smtp` und den Ordner leeren |
+| PHP-Sitzungsdateien (Ablage des Hosters) | Anmeldezustand, Kennung, CSRF-Token, offene Vorschau (Meldung vor dem Setzen) | nur Sitzungs-ID im Cookie (`HttpOnly`, `Secure`, `SameSite=Strict`); Dateien unverschlüsselt im Sitzungsordner des Hosters | Mitlesen durch andere Kunden bei schlecht getrenntem Shared Hosting; enthält keine Passwörter und keine TOTP-Secrets |
+| Server-Fehlerlog (Hoster) | technische Fehler, z. B. "Signal-Versand fehlgeschlagen (HTTP 401)" | keine Adressen, keine Inhalte, keine Zugangsdaten | – |
+
+### 11.3 Was die Anwendung verlässt
+
+| Weg | Empfänger | Inhalt | Schutz | Risiko |
+|---|---|---|---|---|
+| Browser | Beschäftigte, Redaktion | Meldungen; Redaktion zusätzlich Protokoll mit IP | HTTPS, HSTS, `no-store` | Gerät der Nutzenden (Bildschirmfoto, Weitergabe) |
+| SMTP | Mailserver → Alarmkreise, Standortverwaltung | Meldungstext, Rufnummern, Kontakte | STARTTLS/SSL mit Zertifikatsprüfung; Empfänger nur per BCC | Mail liegt danach unverschlüsselt in Postfächern; fällt bei IT-Ausfall mit aus |
+| Signal | eigener Gateway-Server → Signal-Dienst → Empfänger | Betreff und Text der ALARM-Mail; Empfängernummern | HTTPS + Token zum Gateway; Signal Ende-zu-Ende ab Gateway | Gateway sieht Klartext; Rufnummern und Metadaten beim Signal-Dienst (USA) |
+| GroupAlarm | GroupAlarm-Cloud → Alarmierte | Betreff und Text, Szenario-ID | HTTPS, Personal-Access-Token | Text liegt beim Anbieter; AV-Vertrag nötig |
+| Audit-Anker | `cc_default_mail1` | Anzahl Einträge, Kopf-Hash | – (enthält keine Inhalte) | – |
+| Protokoll-Export | Gerät des Admins (Download) | Protokoll im Klartext, IP nur wenn gewählt | Download nur für Admins mit TOTP-Login, jeder Export wird protokolliert | **Datei liegt danach ungeschützt beim Admin:** verschlüsselt ablegen, zweckgebunden weitergeben, nach Zweck löschen |
+| Aushang | Papier | Adresse, QR-Code, optional Benutzername des gemeinsamen Zugangs und Notfallnummern | Passwort wird nie gedruckt | Benutzername öffentlich: das Passwort bleibt der eigentliche Schutz |
+| `health.php` | externer Uptime-Dienst | nur `ok`, `db` oder `cron` | optional Token | verrät nur Verfügbarkeit |
+
+### 11.4 Wer was lesen kann
+
+| Wer | kann lesen | kann nicht |
+|---|---|---|
+| Beschäftigte (gemeinsamer Zugang) | geltende und 48 h alte Meldungen | Protokoll, Adressen, Notizen |
+| Redaktion (Kennung + Passwort + TOTP) | zusätzlich Verlauf, Protokoll (mit IP und Notizen), Nutzung, Aushang | Adressen im Klartext, Export |
+| Admin | zusätzlich Benutzer, System (Adressen und Nummern nur maskiert), Export | Passwörter, TOTP-Secrets, Adressen im Klartext |
+| Hoster / DB-Administration ohne Datei-Zugriff | Klartextspalten aus 11.1 (wer hat wann welchen Status gesetzt) | verschlüsselte Inhalte; unbemerkt fälschen |
+| Wer `config.local.inc.php` besitzt | **alles** | – |
+

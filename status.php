@@ -12,6 +12,7 @@ if (!stage1_ok()) {
     redirect('index.php');
 }
 
+monitor_tick();
 $board = status_board();
 foreach ($board['live'] as $r) {
     view_count((int)$r['id']); // anonym: einmal je Sitzung und Meldung

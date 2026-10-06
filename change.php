@@ -13,6 +13,7 @@ if (!stage1_ok()) {
     redirect('index.php');
 }
 
+monitor_tick();
 $bcm = bcm();
 $user = stage2_user();
 $errors = [];
@@ -24,22 +25,20 @@ if ($method === 'POST') {
 
     if ($act === 'login2') {
         $uid = strtolower(trim((string)($_POST['user'] ?? '')));
-        $wait = throttle_locked('s2', $uid);
-        if ($wait > 0) {
-            $errors[] = 'Zu viele Fehlversuche. Bitte in ca. ' . (int)ceil($wait / 60) . ' Minute(n) erneut versuchen.';
-        } else {
-            $u = verify_user($uid, (string)($_POST['password'] ?? ''));
-            throttle_record('s2', $uid, $u !== null);
-            if ($u) {
-                session_regenerate_id(true);
-                $_SESSION['s2'] = ['u' => $u['id'], 't' => time()];
-                audit('login2.ok', 'session', [], $u['id'], 2);
-                redirect('change.php');
-            }
-            fail_delay();
-            audit('login2.fail', 'session', ['user' => mb_substr(preg_replace('/[^\w.@-]/u', '?', $uid) ?? '', 0, 32)], 'anonymous', 1);
-            $errors[] = 'Anmeldung fehlgeschlagen.';
+        if ($e = personal_login_start($uid, (string)($_POST['password'] ?? ''))) {
+            $errors[] = $e;
+        } elseif (personal_login_pending() === null) {
+            redirect('change.php');
         }
+    } elseif ($act === 'login_totp') {
+        if ($e = personal_login_totp((string)($_POST['totp'] ?? ''))) {
+            $errors[] = $e;
+        } else {
+            redirect('change.php');
+        }
+    } elseif ($act === 'login_cancel') {
+        unset($_SESSION['login_totp']);
+        redirect('change.php');
     } elseif ($act === 'logout2') {
         unset($_SESSION['s2'], $_SESSION['pending']);
         redirect('change.php');
@@ -156,6 +155,11 @@ if ($method === 'POST') {
                         } else {
                             flash('ok', 'ALARM-Mail an ' . $m['ok'] . ' Adressen versendet.');
                         }
+                        foreach ($m['channels'] ?? [] as $ch => [$cok, $cfail]) {
+                            $lbl = $ch === 'signal' ? 'Signal' : 'GroupAlarm';
+                            flash($cfail > 0 ? 'warn' : 'ok', $cfail > 0 ? "$lbl: $cok erfolgreich, $cfail fehlgeschlagen – Details im Server-Fehlerlog."
+                                : ($ch === 'signal' ? "Signal an $cok Empfänger versendet." : "GroupAlarm ausgelöst ($cok Szenario/Szenarien)."));
+                        }
                     } catch (Throwable $e) {
                         error_log('Status-BCM: Alarm-Mail: ' . $e->getMessage());
                         flash('err', 'Die Meldung wurde gespeichert, die ALARM-Mail konnte NICHT versendet werden.');
@@ -177,6 +181,13 @@ foreach ($errors as $e) {
     echo '<div class="alert alert-danger" role="alert">' . h($e) . '</div>';
 }
 
+if (!$user && ($pendingId = personal_login_pending()) !== null) {
+    echo '<div class="card shadow-sm"><div class="card-body"><h2 class="h5">Anmeldung Stufe 2</h2>';
+    render_login_totp('change.php', $pendingId);
+    echo '</div></div>';
+    page_end();
+    exit;
+}
 if (!$user) {
     echo '<div class="card shadow-sm"><div class="card-body"><h2 class="h5">Anmeldung Stufe 2</h2>'
         . '<p class="text-body-secondary small">Für Änderungen ist eine persönliche Anmeldung erforderlich.</p>';
@@ -354,7 +365,15 @@ if (is_array($pending) && ($pending['user'] ?? '') === $user['id'] && time() - (
         $kind = ['set' => 'new', 'extend' => 'update', 'update' => 'update', 'end' => 'end'][$spec['mode']];
         echo '<div class="alert alert-warning"><strong>ALARM-Mail wird versendet</strong> (Betreff beginnt mit "' . h(mail_prefixes()[$kind]) . '") an '
             . (int)count($to) . ' Adressen per BCC: ' . h($names ? implode(', ', $names) : 'kein Kreis')
-            . ($locCount ? ' sowie ' . (int)$locCount . ' Adresse(n) der Standortverwaltung' : '') . '. Kopie an Sie und die Standard-CC-Adresse.</div>';
+            . ($locCount ? ' sowie ' . (int)$locCount . ' Adresse(n) der Standortverwaltung' : '') . '. Kopie an Sie und die Standard-CC-Adresse.';
+        $ct = channel_targets($spec);
+        if ($ct['signal'] && channel_enabled('signal')) {
+            echo ' Zusätzlich <strong>Signal</strong> an ' . count($ct['signal']) . ' Empfänger.';
+        }
+        if ($ct['groupalarm'] && channel_enabled('groupalarm') && in_array($kind, (array)cfg('channels.groupalarm.kinds', ['new', 'update', 'end']), true)) {
+            echo ' Zusätzlich <strong>GroupAlarm</strong> (Szenario ' . h(implode(', ', array_keys($ct['groupalarm']))) . ').';
+        }
+        echo '</div>';
     } elseif ($def['alarm_mail_default'] && $spec['mode'] === 'set') {
         echo '<div class="alert alert-warning">Für diesen Status ist üblicherweise eine ALARM-Mail vorgesehen – es wird <strong>keine</strong> gesendet. Mit "Abbrechen" können Sie das ändern.</div>';
     }
@@ -518,6 +537,7 @@ foreach ($hist as $r) {
 echo '</ul></div></div>';
 
 /* Audit-Protokoll */
+echo '<p class="small"><a href="aushang.php">Aushang mit QR-Code drucken</a>' . ($user['role'] === 'admin' ? ' · <a href="system.php#export">Protokoll exportieren (CSV/PDF)</a>' : '') . '</p>';
 $v = audit_verify();
 echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Änderungsprotokoll</h2>';
 echo '<div class="alert alert-' . ($v['ok'] ? 'success' : 'danger') . ' py-2">Integrität der Protokollkette: ' . ($v['ok'] ? 'OK' : 'FEHLER – ' . h((string)$v['error']))
