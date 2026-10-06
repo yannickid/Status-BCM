@@ -21,7 +21,7 @@ Empfehlung: eine eigene, neutrale Subdomain wie `status.ihre-domain.de`, ohne Be
 ## 2. Datenbank und Postfach anlegen (Kundenmenü des Hosters)
 
 1. Eine neue MySQL-Datenbank anlegen, z. B. `statusbcm`, mit eigenem Benutzer und langem Zufallspasswort.
-2. Rechte: `SELECT, INSERT, UPDATE, DELETE, CREATE, INDEX, TRIGGER`. Ohne `TRIGGER` funktioniert alles, die
+2. Rechte: `SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, TRIGGER`. Ohne `TRIGGER` funktioniert alles, die
    Append-only-Sperre des Protokolls entfällt dann aber (die Hash-Kette erkennt Manipulation weiterhin).
 3. Ein Postfach für den Absender anlegen, z. B. `status@ihre-domain.de`.
 4. Notieren: Datenbank-Server, Datenbankname, Benutzer, Passwort; SMTP-Server, Port, Benutzer, Passwort.
@@ -42,9 +42,10 @@ setup.php  lib.inc.php  qr.inc.php  config.inc.php  config.json  assets/
    `0775`). Besser noch: `storage` außerhalb des Webroots (siehe [Konfiguration](02-konfiguration.md)).
 4. `config.json` auf schreibgeschützt setzen (`0444`).
 
-Vorher anpassen oder später austauschen: `config.json` mit Standorten, Durchwahlen, `default_phone` und der
-Rufnummer im Status "Eingeschränkte telefonische Erreichbarkeit". Siehe [Konfiguration](02-konfiguration.md).
-Der Katalog wird bewusst nicht im Browser bearbeitet: Wer ihn ändern will, braucht Dateizugriff.
+Vorher anpassen oder später austauschen: `config.json` mit `default_phone` und der Rufnummer im Status
+"Eingeschränkte telefonische Erreichbarkeit". Siehe [Konfiguration](02-konfiguration.md). Die Meldungstexte werden
+bewusst nicht im Browser bearbeitet: Wer sie ändern will, braucht Dateizugriff. Standorte samt E-Mail der
+Standortverwaltung, Alarmkreise und Kontakte pflegen Sie nach der Einrichtung unter **System**.
 
 ## 4. Einrichtungsassistent
 
@@ -69,10 +70,10 @@ Sie auf "Weiter".
 
 | Feld | Bedeutung |
 |---|---|
-| Zugangspasswort (Stufe 1) | gemeinsames Passwort aller Beschäftigten zum Lesen (mind. 10 Zeichen) |
+| Gemeinsamer Zugang (Stufe 1) | Benutzername (z. B. "Unternehmen", Standard "zugang") und Passwort aller Beschäftigten zum Lesen (mind. 10 Zeichen) |
 | Erster Admin | Kennung, Name, E-Mail, eigenes Passwort (mind. 12 Zeichen, gern ein Satz) |
 | Kopie-Adresse | `cc_default_mail1`: Erinnerungen, Kopie der ALARM-Mails, täglicher Audit-Anker (z. B. ISB) |
-| ALARM-Empfänger | optional, eine Adresse je Zeile; später unter **System** änderbar |
+| ALARM-Empfänger | optional, eine Adresse je Zeile; landen im Alarmkreis "Allgemein". Weitere Kreise später unter **System** |
 
 Nach "Einrichtung abschließen" legt der Assistent die Tabellen an, speichert die Werte verschlüsselt in der
 Datenbank, protokolliert die Einrichtung, **löscht die Code-Datei und sperrt sich dauerhaft**. `install.php` darf
@@ -80,8 +81,8 @@ danach vom Webspace gelöscht werden.
 
 ## 5. Erste Anmeldung und Authenticator-App
 
-1. Startseite → Zugangspasswort eingeben.
-2. **Einstellungen** → Kennung und Passwort des Admins.
+1. Startseite → Kennung und Passwort des Admins eingeben (nicht den gemeinsamen Zugang).
+2. Es öffnet sich **Einstellungen → Zugang einrichten**.
 3. Die Seite zeigt einen **QR-Code**. In der Authenticator-App (Microsoft Authenticator, Google Authenticator,
    FreeOTP, Aegis, …) "Konto hinzufügen" → QR-Code scannen. Ohne Kamera, etwa am selben Smartphone: den darunter
    angezeigten Schlüssel abtippen oder den Link antippen.
@@ -107,13 +108,13 @@ Die Adresse enthält ein Geheimnis. Tragen Sie sie nur beim Cron-Dienst ein. Wer
 
 ## 7. Prüfen
 
-<img src="img/system-mobil.png" alt="Seite System mit Prüfung, Cron, Empfängern" width="250">
+<img src="img/system-mobil.png" alt="Seite System mit Prüfung, Cron, Alarmkreisen, Standorten, Kontakten" width="250">
 
 1. **System → Prüfung**: Alle Punkte sollen "ok" zeigen.
 2. **System → Mailversand testen**: Die Testmail muss ankommen.
 3. Diese Adressen dürfen nichts liefern (403/404): `/config.json`, `/lib.inc.php`, `/config.local.inc.php`,
    `/setup.php`, `/storage/`, `/tests/`.
-4. Einen Test-Status "Übung" mit ALARM-Mail setzen (siehe [Bedienung](03-bedienung.md)), Empfang prüfen und den Status
+4. Eine Meldung "Übung" mit ALARM-Mail setzen (siehe [Bedienung](03-bedienung.md)), Empfang prüfen und die Meldung
    wieder beenden.
 
 ## 8. Sichern
@@ -138,8 +139,9 @@ php tests/selftest.php                                   # Selbsttest
 php setup.php init                                       # Master-Key + Cron-Token → config.local.inc.php
 # config.local.inc.php: base_url, db.*, mail.* eintragen
 php setup.php set-stage1                                 # Zugangspasswort Stufe 1
+php setup.php set-stage1-user Unternehmen                # Benutzername des gemeinsamen Zugangs
 php setup.php add-user chef "Vorname Nachname" chef@firma.de admin
-php setup.php add-recipient alarm1@firma.de              # ALARM-Empfänger
+php setup.php add-recipient alarm1@firma.de              # ALARM-Empfänger (Kreis "Allgemein")
 php setup.php set-cc1 isb@firma.de                       # Kopie-Adresse
 php setup.php check                                      # Gesamtprüfung
 ```

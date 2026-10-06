@@ -18,21 +18,26 @@ erreichbar, wenn Netzwerk, Telefon oder Mail im Haus gestört sind.
 
 ## Was es kann
 
-* **Zwei Stufen:** gemeinsames Zugangspasswort zum Lesen, persönlicher Login zum Ändern.
+* **Ein Anmeldeformular, zwei Stufen:** gemeinsamer Benutzername + Zugangspasswort zum Lesen, persönliche Kennung zum
+  Ändern (kritische Änderungen zusätzlich mit TOTP).
 * **Keine Falschmeldungen:** nur freigegebene, pressetaugliche Textbausteine; immer Vorschau → verbindlich setzen;
   TOTP-Bestätigung bei ALARM-Mail und kritischen Status; kritische Begriffe ("Ausfall", "Angriff", …) werden
   blockiert.
-* **Standorte mit Rückrufnummer,** Status mit **Dauer oder "Gültig bis"**; Erinnerungsmail bei Ablauf, bis verlängert
-  oder beendet wird.
-* **ALARM-Mail** per BCC an hinterlegte Empfänger. Die Adressen sind verschlüsselt und nirgends sichtbar.
+* **Mehrere Meldungen gleichzeitig** (z. B. Netzwerk an Standort A, Sicherheitsmaßnahme an Standort B), je mit
+  **Dauer oder "Gültig bis"**; abgelaufene oder beendete Meldungen bleiben 48 Stunden ausgegraut sichtbar
+  ("Nicht mehr gültig" bzw. "Zurückgenommen / gelöst"). Erinnerungsmail bei Ablauf, bis verlängert oder beendet wird.
+* **Standorte mit Rückrufnummer** und **Kontakte** je Meldung: Notfallnummer, E-Mail oder Videokonferenz.
+* **ALARM-Mail** per BCC an gewählte **Alarmkreise** (z. B. IT, BOA/Krisenstab, Leitung) und die Standortverwaltung
+  der betroffenen Außenstellen, mit einstellbarem Betreff-Präfix für neu, Aktualisierung und Ende. Die Adressen sind
+  verschlüsselt und nirgends im Klartext sichtbar.
 * **Revisionssicheres Protokoll:** wer, was, wann, wie; Hash-Kette mit HMAC, append-only per DB-Trigger, täglicher
   Audit-Anker per Mail.
 * **Verschlüsselte Ablage** (AES-256-GCM) von Meldungen, Standortdaten, Mail-Inhalten, Protokolldetails und
   Benutzerdaten.
 * **Benutzerverwaltung** mit Rollen (Redaktion / Admin), Einmalpasswort, Selbst-Einrichtung der Authenticator-App per
   QR-Code, Passwort-Gültigkeit mit Erinnerungsmail.
-* **Komplett im Browser bedienbar:** Einrichtungsassistent, Systemseite (Empfänger, Zugangspasswort, Cron, Prüfung,
-  Testmail) und Notfallzugang per FTP-Datei. Eine Kommandozeile ist nicht nötig.
+* **Komplett im Browser bedienbar:** Einrichtungsassistent, Systemseite (Alarmkreise, Standorte, Kontakte, Präfixe,
+  Zugangspasswort, Cron, Prüfung, Testmail) und Notfallzugang per FTP-Datei. Eine Kommandozeile ist nicht nötig.
 * **Nutzung auswerten:** Anmeldungen je Stufe und Benutzer, anonymer Lesezähler je Status.
 * **Mobile First** mit Bootstrap 5.3 (lokal, nur CSS), **ohne JavaScript**, etwa 3 KB je Seitenaufruf.
 * **Keine Abhängigkeiten:** PHP ≥ 8.0, MySQL/MariaDB, kein Composer, kein CDN, eigener SMTP-Client mit
@@ -64,18 +69,18 @@ Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-install
 
 | Datei | Zweck |
 |---|---|
-| `index.php` | Login Stufe 1 (gemeinsames Zugangspasswort) |
+| `index.php` | Anmeldung: gemeinsamer Zugang (nur Lesen) oder persönliche Kennung (mit Einstellungen) |
 | `status.php` | aktueller Status |
-| `change.php` | Login Stufe 2, Status setzen (Formular → Vorschau → verbindlich), Verlauf, Protokoll, Nutzung, eigenes Passwort |
+| `change.php` | Login Stufe 2, Meldungen setzen, verlängern, ändern, beenden (Formular → Vorschau → verbindlich), Verlauf, Protokoll, Nutzung, eigenes Passwort |
 | `admin.php` | Benutzerverwaltung (nur Admins) |
-| `system.php` | System (nur Admins): Prüfung, Cron-Adresse, ALARM-Empfänger, Kopie-Adresse, Zugangspasswort, Testmail |
+| `system.php` | System (nur Admins): Prüfung, Cron-Adresse, Alarmkreise, Standorte mit E-Mail der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse, Zugangspasswort, Testmail |
 | `install.php` | Einrichtungsassistent (sperrt sich nach der Einrichtung) und Notfallzugang |
 | `qr.inc.php` | QR-Code als SVG für die Authenticator-App (ohne externe Dienste) |
 | `cron.php` | Erinnerungen, Passwort-Erinnerungen, Audit-Anker, Aufräumen (CLI oder URL mit Token) |
 | `setup.php` | optional: dieselben Aufgaben per Kommandozeile |
 | `lib.inc.php` | gesamte Logik |
 | `config.inc.php` | Einstellungen mit Platzhaltern; echte Werte in `config.local.inc.php` (nicht im Git) |
-| `config.json` | Status-Katalog, Standorte, Mail-Vorlagen, kritische Begriffe |
+| `config.json` | Status-Katalog, Start-Standorte, Mail-Vorlagen, kritische Begriffe |
 | `assets/` | Bootstrap 5.3.8 (MIT-Lizenz) und `app.css` |
 | `tests/` | `selftest.php` (SQLite/MySQL), `webtest.php` (Ablauf über `php -S`), `installtest.php` (Einrichtung im Browser) |
 

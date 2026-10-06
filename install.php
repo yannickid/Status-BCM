@@ -319,6 +319,12 @@ if ($act === 'finish' && !$editCfg) {
     }
     $errors = array_merge($errors, password_policy($apw, $aid));
     $s1 = (string)($_POST['s1'] ?? '');
+    $s1u = $in('s1user');
+    if (!preg_match('/^[\p{L}0-9._-]{2,40}$/u', $s1u)) {
+        $errors[] = 'Benutzername für den gemeinsamen Zugang: 2 bis 40 Zeichen, Buchstaben, Ziffern, Punkt, _ und - (keine Leerzeichen).';
+    } elseif (login_name_key($s1u) === $aid) {
+        $errors[] = 'Benutzername des gemeinsamen Zugangs und Kennung des Admins müssen verschieden sein.';
+    }
     if (mb_strlen($s1) < 10 || !hash_equals($s1, (string)($_POST['s1b'] ?? ''))) {
         $errors[] = 'Zugangspasswort: mindestens 10 Zeichen, beide Eingaben gleich.';
     } elseif (hash_equals($s1, $apw)) {
@@ -330,17 +336,20 @@ if ($act === 'finish' && !$editCfg) {
     if (!$errors) {
         try {
             install_schema(db());
-            tx(function () use ($aid, $apw, $in, $s1) {
+            tx(function () use ($aid, $apw, $in, $s1, $s1u) {
                 account_action('create', $aid, ['name' => $in('admin_name'), 'email' => $in('admin_email'), 'role' => 'admin', 'password' => $apw], 'system:install');
                 if ($e = stage1_change($s1, $s1, 'system:install')) {
                     throw new InvalidArgumentException(implode(' ', $e));
+                }
+                if ($e = stage1_user_change($s1u, 'system:install')) {
+                    throw new InvalidArgumentException($e);
                 }
                 if ($e = cc1_change($in('cc1'), 'system:install')) {
                     throw new InvalidArgumentException($e);
                 }
                 if (trim((string)($_POST['recipients'] ?? '')) !== '') {
-                    [, $e] = recipients_add((string)$_POST['recipients'], 'system:install');
-                    if ($e) {
+                    $e = circle_update('allgemein', (string)$_POST['recipients'], [], 'system:install');
+                    if ($e && !str_starts_with($e, 'Keine Änderung')) {
                         throw new InvalidArgumentException('ALARM-Empfänger: ' . $e);
                     }
                 }
@@ -364,8 +373,8 @@ if ($act === 'finish' && !$editCfg) {
             . '<strong>alle 5 Minuten</strong> aufrufen lassen. Ohne Cron gibt es keine Erinnerungsmails.'
             . '<div class="font-monospace small break-all border rounded p-2 my-1 bg-body">' . h($cron) . '</div>'
             . '<span class="small text-body-secondary">Sie finden die Adresse später auch unter System.</span></li>'
-            . '<li class="mb-2"><strong>Anmelden und Authenticator-App koppeln:</strong> Zur Anmeldung, Zugangspasswort eingeben, dann '
-            . '"Einstellungen" mit Kennung <code>' . h($aid) . '</code> und Ihrem Passwort. Dort den QR-Code mit der Authenticator-App scannen.</li>'
+            . '<li class="mb-2"><strong>Anmelden und Authenticator-App koppeln:</strong> Zur Anmeldung, dort mit Kennung <code>' . h($aid) . '</code> '
+            . 'und Ihrem persönlichen Passwort anmelden. Dort den QR-Code mit der Authenticator-App scannen.</li>'
             . '<li class="mb-2"><strong>Sichern:</strong> <code>config.local.inc.php</code> per FTP herunterladen und getrennt sicher aufbewahren '
             . '(enthält den Master-Key). Danach unter System die Prüfung ansehen.</li></ol>'
             . '<p><a class="btn btn-primary" href="index.php">Zur Anmeldung</a></p>';
@@ -436,8 +445,9 @@ $p = fn(string $k) => h((string)($_POST[$k] ?? ''));
 echo '<h1 class="h4">Schritt 3 von 3: Zugänge</h1>';
 echo '<p class="small"><a href="install.php?edit=1">Server-Daten ändern</a></p>';
 echo '<form method="post" action="install.php" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="finish">';
-echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Zugangspasswort für alle (Stufe 1)</h2>'
-    . '<p class="small text-body-secondary">Ein gemeinsames Passwort zum Lesen des Status. Es schützt vor Suchmaschinen und Zufallsbesuchern und wird intern bekannt gegeben.</p>'
+echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Gemeinsamer Zugang für alle (Stufe 1)</h2>'
+    . '<p class="small text-body-secondary">Benutzername und Passwort, die alle Beschäftigten zum Lesen des Status verwenden. Sie schützen vor Suchmaschinen und Zufallsbesuchern und werden intern bekannt gegeben.</p>'
+    . inst_field('Benutzername, z. B. Unternehmen', 's1user', (string)($_POST['s1user'] ?? 'zugang'), 'text', 'required maxlength="40" autocapitalize="none"')
     . inst_field('Zugangspasswort (mind. 10 Zeichen)', 's1', '', 'password', 'required autocomplete="new-password"')
     . inst_field('Wiederholen', 's1b', '', 'password', 'required autocomplete="new-password"') . '</div></div>';
 echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Erster Admin (persönlicher Zugang)</h2>'
@@ -451,9 +461,9 @@ echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Ers
 echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">E-Mail-Adressen</h2>'
     . inst_field('Kopie-Adresse (cc_default_mail1)', 'cc1', (string)($_POST['cc1'] ?? ''), 'email', 'required',
         'Erhält Erinnerungen, Kopien der ALARM-Mails und täglich den Audit-Anker, z. B. die Informationssicherheit.')
-    . '<div class="mb-2"><label class="form-label" for="f_rcpt">ALARM-Empfänger (optional, eine Adresse je Zeile)</label>'
+    . '<div class="mb-2"><label class="form-label" for="f_rcpt">ALARM-Empfänger, Kreis "Allgemein" (optional, eine Adresse je Zeile)</label>'
     . '<textarea class="form-control" id="f_rcpt" name="recipients" rows="4">' . $p('recipients') . '</textarea>'
-    . '<div class="form-text">Werden nur per BCC angeschrieben und verschlüsselt gespeichert. Später unter System änderbar.</div></div>'
+    . '<div class="form-text">Werden nur per BCC angeschrieben und verschlüsselt gespeichert. Weitere Alarmkreise (z. B. IT, Krisenstab, Leitung) und Standort-Adressen später unter System.</div></div>'
     . '</div></div>';
 echo '<div class="d-grid"><button class="btn btn-primary btn-lg" type="submit">Einrichtung abschließen</button></div></form>';
 page_end();

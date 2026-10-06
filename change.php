@@ -18,8 +18,6 @@ $user = stage2_user();
 $errors = [];
 $old = [];
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$current = $user ? status_current() : null;
-
 if ($method === 'POST') {
     csrf_verify();
     $act = (string)($_POST['action'] ?? '');
@@ -97,7 +95,8 @@ if ($method === 'POST') {
         unset($_SESSION['pending']);
         redirect('change.php');
     } elseif ($act === 'preview') {
-        [$spec, $errs] = parse_change_request($_POST, $current);
+        $target = ($_POST['mode'] ?? 'set') === 'set' ? null : status_target((int)($_POST['target'] ?? 0));
+        [$spec, $errs] = parse_change_request($_POST, $target);
         if ($errs) {
             $errors = $errs;
             $old = $_POST;
@@ -134,11 +133,24 @@ if ($method === 'POST') {
             }
             if ($ok) {
                 unset($_SESSION['pending']);
-                $res = status_create($spec, $user['id'], ['totp' => $needs, 'preview_confirmed' => true]);
-                flash('ok', 'Status gesetzt: ' . $res['payload']['label'] . '.');
+                $how = ['totp' => $needs, 'preview_confirmed' => true];
+                try {
+                    if ($spec['mode'] === 'end') {
+                        $res = status_end((int)$spec['target'], $user['id'], $how, (string)$spec['note']);
+                        flash('ok', 'Meldung beendet: ' . $res['payload']['label'] . '.');
+                    } else {
+                        $res = status_create($spec, $user['id'], $how);
+                        flash('ok', ['set' => 'Meldung gesetzt: ', 'extend' => 'Meldung verlängert: ', 'update' => 'Meldung geändert: '][$spec['mode']]
+                            . $res['payload']['label'] . '.');
+                    }
+                } catch (InvalidArgumentException $e) {
+                    flash('err', $e->getMessage());
+                    redirect('change.php');
+                }
                 if (!empty($spec['alarm_mail'])) {
+                    $kind = ['set' => 'new', 'extend' => 'update', 'update' => 'update', 'end' => 'end'][$spec['mode']];
                     try {
-                        $m = send_alarm_mail((int)$res['id'], $res['payload'], $res['valid_until'], $user['id']);
+                        $m = send_alarm_mail($kind, (int)$res['id'], $res['payload'], $res['valid_until'], $user['id'], $spec);
                         if ($m['failed'] > 0) {
                             flash('warn', 'ALARM-Mail: ' . $m['ok'] . ' von ' . $m['total'] . ' Adressen zugestellt – Details im Protokoll.');
                         } else {
@@ -146,14 +158,13 @@ if ($method === 'POST') {
                         }
                     } catch (Throwable $e) {
                         error_log('Status-BCM: Alarm-Mail: ' . $e->getMessage());
-                        flash('err', 'Der Status wurde gesetzt, die ALARM-Mail konnte NICHT versendet werden.');
+                        flash('err', 'Die Meldung wurde gespeichert, die ALARM-Mail konnte NICHT versendet werden.');
                     }
                 }
                 redirect('change.php');
             }
         }
     }
-    $current = $user ? status_current() : null;
 }
 
 /* ------------------------------------------------------------------ Ausgabe */
@@ -246,22 +257,105 @@ if ($notes) {
     echo '</ul></div>';
 }
 
+/* Formular-Bausteine (ohne JavaScript; $sfx macht die Feld-IDs je Formular eindeutig) */
+function form_locations(array $bcm, array $sel, bool $all, string $sfx): string
+{
+    $h = '<fieldset class="mb-3"><legend class="form-label fs-6 fw-semibold mb-1">Betroffene Standorte <span class="text-body-secondary small fw-normal">(nur bei Status "mit Standortliste")</span></legend>'
+        . '<div class="form-check"><input class="form-check-input" type="checkbox" id="la' . $sfx . '" name="loc_all" value="1"' . ($all ? ' checked' : '')
+        . '><label class="form-check-label" for="la' . $sfx . '">Alle Standorte der Liste</label></div>';
+    foreach ($bcm['locations'] as $i => $l) {
+        $h .= '<div class="form-check"><input class="form-check-input" type="checkbox" id="l' . $sfx . '_' . (int)$i . '" name="loc[]" value="' . h($l['id']) . '"'
+            . (in_array($l['id'], $sel, true) ? ' checked' : '') . '><label class="form-check-label" for="l' . $sfx . '_' . (int)$i . '">' . h($l['name'])
+            . ' <span class="text-body-secondary small">(' . h(trim((string)$l['phone']) !== '' ? $l['phone'] : 'Standard: ' . $bcm['default_phone']) . ')</span></label></div>';
+    }
+    return $h . '</fieldset>';
+}
+
+function form_contacts(array $sel, string $sfx): string
+{
+    $list = contacts_all();
+    if (!$list) {
+        return '';
+    }
+    $h = '<fieldset class="mb-3"><legend class="form-label fs-6 fw-semibold mb-1">Kontakt anzeigen <span class="text-body-secondary small fw-normal">(optional; Pflege unter System)</span></legend>';
+    foreach ($list as $i => $c) {
+        $info = implode(' · ', array_filter([$c['phone'], $c['email'], $c['platform'], $c['meeting'] !== '' ? 'ID ' . $c['meeting'] : '']));
+        $h .= '<div class="form-check"><input class="form-check-input" type="checkbox" id="c' . $sfx . '_' . (int)$i . '" name="contacts[]" value="' . h($c['id']) . '"'
+            . (in_array($c['id'], $sel, true) ? ' checked' : '') . '><label class="form-check-label" for="c' . $sfx . '_' . (int)$i . '">' . h($c['name'])
+            . ' <span class="text-body-secondary small">(' . h($info) . ')</span></label></div>';
+    }
+    return $h . '</fieldset>';
+}
+
+function form_validity(array $bcm, array $old, string $sfx): string
+{
+    $vt = (string)($old['validity_type'] ?? 'duration');
+    $h = '<fieldset class="mb-3"><legend class="form-label fs-6 fw-semibold mb-1">Gültigkeit</legend>'
+        . '<div class="form-check"><input class="form-check-input" type="radio" id="vd' . $sfx . '" name="validity_type" value="duration"' . ($vt === 'duration' ? ' checked' : '')
+        . '><label class="form-check-label" for="vd' . $sfx . '">Dauer</label></div><select class="form-select mb-2" name="duration" aria-label="Dauer">';
+    foreach ($bcm['validity_options_minutes'] as $min) {
+        $h .= '<option value="' . (int)$min . '"' . ((int)($old['duration'] ?? 240) === $min ? ' selected' : '') . '>' . h(fmt_minutes($min)) . '</option>';
+    }
+    return $h . '</select>'
+        . '<div class="form-check"><input class="form-check-input" type="radio" id="vu' . $sfx . '" name="validity_type" value="until"' . ($vt === 'until' ? ' checked' : '')
+        . '><label class="form-check-label" for="vu' . $sfx . '">Gültig bis <span class="text-body-secondary small">(' . h((string)cfg('app.timezone')) . ')</span></label></div>'
+        . '<input class="form-control mb-2" type="datetime-local" name="until" aria-label="Gültig bis" value="' . h((string)($old['until'] ?? '')) . '">'
+        . '<div class="form-check"><input class="form-check-input" type="radio" id="vx' . $sfx . '" name="validity_type" value="unlimited"' . ($vt === 'unlimited' ? ' checked' : '')
+        . '><label class="form-check-label" for="vx' . $sfx . '">Unbefristet <span class="text-body-secondary small">(nur wo zulässig)</span></label></div></fieldset>';
+}
+
+function form_alarm(array $old, string $sfx, string $label): string
+{
+    $sel = array_map('strval', (array)($old['circles'] ?? []));
+    $h = '<fieldset class="mb-3 border rounded p-2"><div class="form-check"><input class="form-check-input" type="checkbox" id="am' . $sfx . '" name="alarm_mail" value="1"'
+        . (!empty($old['alarm_mail']) ? ' checked' : '') . '><label class="form-check-label" for="am' . $sfx . '"><strong>' . h($label) . '</strong>'
+        . ' <span class="text-body-secondary small">(erfordert TOTP-Bestätigung)</span></label></div>'
+        . '<div class="small text-body-secondary mt-1 mb-1">An welche Alarmkreise?</div>';
+    foreach (alarm_circles() as $i => $c) {
+        $h .= '<div class="form-check"><input class="form-check-input" type="checkbox" id="k' . $sfx . '_' . (int)$i . '" name="circles[]" value="' . h($c['id']) . '"'
+            . (in_array($c['id'], $sel, true) ? ' checked' : '') . '><label class="form-check-label" for="k' . $sfx . '_' . (int)$i . '">' . h($c['name'])
+            . ' <span class="text-body-secondary small">(' . count($c['emails']) . ' Adressen)</span></label></div>';
+    }
+    $nl = !array_key_exists('alarm_mail', $old) || !empty($old['notify_loc']);
+    return $h . '<div class="form-check"><input class="form-check-input" type="checkbox" id="nl' . $sfx . '" name="notify_loc" value="1"' . ($nl ? ' checked' : '')
+        . '><label class="form-check-label" for="nl' . $sfx . '">Standortverwaltungen informieren <span class="text-body-secondary small">(betroffene Standorte; bei Meldungen für alle: alle Standorte)</span></label></div></fieldset>';
+}
+
+function form_note(array $old, string $sfx): string
+{
+    return '<label class="form-label" for="n' . $sfx . '">Interne Notiz / Anlass <span class="text-body-secondary small">(nur im Protokoll, max. 200 Zeichen)</span></label>'
+        . '<input class="form-control mb-3" id="n' . $sfx . '" type="text" name="note" maxlength="200" value="' . h((string)($old['note'] ?? '')) . '">';
+}
+
 /* Vorschau (zweiter Schritt) */
 $pending = $_SESSION['pending'] ?? null;
 $ttl = (int)cfg('auth.pending_ttl_seconds', 300);
 if (is_array($pending) && ($pending['user'] ?? '') === $user['id'] && time() - (int)$pending['t'] <= $ttl) {
     $spec = $pending['spec'];
     $def = $bcm['by_key'][$spec['key']];
-    $payload = build_payload($def, $spec['loc_ids'], $spec['note']);
+    $target = $spec['target'] ? status_target((int)$spec['target']) : null;
     $needs = spec_needs_totp($spec);
-    echo '<h2 class="h5">Vorschau – bitte prüfen</h2>';
-    echo '<p class="text-body-secondary small">So sehen alle Personen mit Zugang die Meldung:</p>';
-    render_status_card(['payload' => $payload, 'created_at' => now_utc(), 'valid_until' => $spec['valid_until'],
-        'mac_ok' => true, 'author' => $user['id'], 'alarm_mail' => $spec['alarm_mail'] ? 1 : 0], true);
+    $title = ['set' => 'Neue Meldung', 'extend' => 'Meldung verlängern', 'update' => 'Meldung ändern', 'end' => 'Meldung beenden'][$spec['mode']];
+    echo '<h2 class="h5">Vorschau: ' . h($title) . ' – bitte prüfen</h2>';
+    if ($spec['mode'] === 'end') {
+        echo '<p class="text-body-secondary small">Die Meldung wird beendet und bleibt ' . (int)cfg('display.keep_hours', 48)
+            . ' Stunden ausgegraut mit dem Vermerk "zurückgenommen / gelöst" sichtbar:</p>';
+        render_status_card(($target ?? ['payload' => build_payload($def, $spec['loc_ids']), 'created_at' => null, 'valid_until' => null, 'mac_ok' => true])
+            + ['gone' => 'ended', 'gone_at' => now_utc()], true);
+        $payload = $target['payload'] ?? build_payload($def, $spec['loc_ids']);
+    } else {
+        $payload = build_payload($def, $spec['loc_ids'], $spec['note'], $spec['contact_ids']);
+        echo '<p class="text-body-secondary small">So sehen alle Personen mit Zugang die Meldung:</p>';
+        render_status_card(['payload' => $payload, 'created_at' => now_utc(), 'valid_until' => $spec['valid_until'],
+            'mac_ok' => true, 'author' => $user['id'], 'alarm_mail' => $spec['alarm_mail'] ? 1 : 0], true);
+    }
     if ($spec['alarm_mail']) {
-        $n = count(alarm_recipients());
-        echo '<div class="alert alert-warning"><strong>ALARM-Mail wird versendet</strong> an ' . (int)$n . ' hinterlegte Empfänger (BCC) sowie an Sie und die Standard-CC-Adresse.</div>';
-    } elseif ($def['alarm_mail_default']) {
+        [$to, $names, $locCount] = alarm_targets($spec, $payload);
+        $kind = ['set' => 'new', 'extend' => 'update', 'update' => 'update', 'end' => 'end'][$spec['mode']];
+        echo '<div class="alert alert-warning"><strong>ALARM-Mail wird versendet</strong> (Betreff beginnt mit "' . h(mail_prefixes()[$kind]) . '") an '
+            . (int)count($to) . ' Adressen per BCC: ' . h($names ? implode(', ', $names) : 'kein Kreis')
+            . ($locCount ? ' sowie ' . (int)$locCount . ' Adresse(n) der Standortverwaltung' : '') . '. Kopie an Sie und die Standard-CC-Adresse.</div>';
+    } elseif ($def['alarm_mail_default'] && $spec['mode'] === 'set') {
         echo '<div class="alert alert-warning">Für diesen Status ist üblicherweise eine ALARM-Mail vorgesehen – es wird <strong>keine</strong> gesendet. Mit "Abbrechen" können Sie das ändern.</div>';
     }
     echo '<form method="post" action="change.php" autocomplete="off" class="card shadow-sm"><div class="card-body">' . csrf_field()
@@ -271,75 +365,87 @@ if (is_array($pending) && ($pending['user'] ?? '') === $user['id'] && time() - (
             . '<input class="form-control form-control-lg mb-3" id="totp" type="text" name="totp" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required autofocus>';
     }
     echo '<div class="d-grid gap-2 d-sm-flex">'
-        . '<button class="btn btn-danger btn-lg" type="submit" name="action" value="commit">Verbindlich setzen</button>'
+        . '<button class="btn btn-danger btn-lg" type="submit" name="action" value="commit">Verbindlich ' . ($spec['mode'] === 'end' ? 'beenden' : 'setzen') . '</button>'
         . '<button class="btn btn-outline-secondary btn-lg" type="submit" name="action" value="cancel" formnovalidate>Abbrechen</button></div></div></form>';
     page_end();
     exit;
 }
 
-/* Aktueller Status + Schnellaktionen */
-echo '<h2 class="h5">Aktueller Status</h2>';
-render_status_card($current, true);
-if ($current && $current['payload'] && $current['status_key'] !== $bcm['default_status']) {
-    echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Ist der Status noch gültig?</h2>';
-    echo '<form method="post" action="change.php">' . csrf_field() . '<input type="hidden" name="validity_type" value="duration">';
-    echo '<input type="hidden" name="mode" value="extend">';
-    echo '<label class="form-label" for="dur_e">Weiterhin gültig – verlängern um</label><select class="form-select mb-2" id="dur_e" name="duration">';
+/* Aktuelle Meldungen mit Aktionen */
+$board = status_board();
+$open = array_merge($board['live'], array_filter($board['recent'], fn($r) => $r['gone'] === 'expired'), $board['stale']);
+$oldT = (int)($old['target'] ?? 0);
+echo '<h2 class="h5">Aktuelle Meldungen (' . count($open) . ')</h2>';
+foreach ($board['unverified'] as $r) {
+    if ($r['payload']) {
+        render_status_card($r, true);
+    }
+}
+if (!$open) {
+    render_status_card(null, false);
+}
+foreach ($open as $r) {
+    $id = (int)$r['id'];
+    $sfx = 'm' . $id;
+    $def = $bcm['by_key'][$r['status_key']] ?? null;
+    render_status_card($r, true);
+    if (!$def) {
+        continue;
+    }
+    $o = $oldT === $id ? $old : [];
+    $hidden = csrf_field() . '<input type="hidden" name="target" value="' . $id . '">';
+    echo '<div class="card shadow-sm mb-4 ms-2"><div class="card-body">';
+    if (($r['gone'] ?? '') === 'expired') {
+        echo '<div class="alert alert-warning py-2 small">Abgelaufen – bitte verlängern oder beenden.</div>';
+    }
+    echo '<form method="post" action="change.php" class="mb-2">' . $hidden . '<input type="hidden" name="mode" value="extend"><input type="hidden" name="validity_type" value="duration">'
+        . '<label class="form-label" for="de' . $sfx . '">Weiterhin gültig – verlängern um</label><div class="d-flex gap-2"><select class="form-select" id="de' . $sfx . '" name="duration">';
     foreach ($bcm['validity_options_minutes'] as $min) {
         echo '<option value="' . (int)$min . '">' . h(fmt_minutes($min)) . '</option>';
     }
-    echo '</select>';
-    echo '<div class="d-grid d-sm-block mb-3"><button class="btn btn-primary" type="submit" name="action" value="preview">Verlängern</button></div>';
-    echo '</form>';
-    echo '<form method="post" action="change.php">' . csrf_field() . '<input type="hidden" name="mode" value="end">';
-    echo '<div class="d-grid d-sm-block"><button class="btn btn-outline-danger" type="submit" name="action" value="preview">Status beenden (zurück auf '
-        . h($bcm['by_key'][$bcm['default_status']]['label']) . ')</button></div>';
-    echo '</form></div></div>';
+    echo '</select><button class="btn btn-primary" type="submit" name="action" value="preview">Verlängern</button></div></form>';
+    $locSel = array_column($r['payload']['locations'] ?? [], 'id');
+    $conSel = array_column($r['payload']['contacts'] ?? [], 'id');
+    echo '<details class="mb-2"' . ($o && ($o['mode'] ?? '') === 'update' ? ' open' : '') . '><summary>Ändern (Standorte, Kontakt, Gültigkeit, ALARM-Mail)</summary>'
+        . '<form method="post" action="change.php" class="mt-2">' . $hidden . '<input type="hidden" name="mode" value="update">'
+        . ($def['audience'] === 'ALLE_UND_ADRESSLISTE' ? form_locations($bcm, array_map('strval', (array)($o['loc'] ?? $locSel)), !empty($o['loc_all']), 'u' . $sfx) : '')
+        . form_contacts(array_map('strval', (array)($o['contacts'] ?? $conSel)), 'u' . $sfx) . form_validity($bcm, $o, 'u' . $sfx)
+        . ($def['alarm_mail_allowed'] ? form_alarm($o, 'u' . $sfx, 'ALARM-Mail "Aktualisierung" senden') : '') . form_note($o, 'u' . $sfx)
+        . '<button class="btn btn-outline-primary" type="submit" name="action" value="preview">Vorschau</button></form></details>';
+    echo '<details' . ($o && ($o['mode'] ?? '') === 'end' ? ' open' : '') . '><summary class="text-danger">Beenden (zurückgenommen / gelöst)</summary>'
+        . '<form method="post" action="change.php" class="mt-2">' . $hidden . '<input type="hidden" name="mode" value="end">'
+        . ($def['alarm_mail_allowed'] ? form_alarm($o, 'e' . $sfx, 'ALARM-Mail "Ende" senden') : '') . form_note($o, 'e' . $sfx)
+        . '<button class="btn btn-outline-danger" type="submit" name="action" value="preview">Vorschau</button></form></details>';
+    echo '</div></div>';
+}
+$ended = array_filter($board['recent'], fn($r) => $r['gone'] === 'ended');
+if ($ended) {
+    echo '<h2 class="h6 text-body-secondary mt-3">Beendet (letzte ' . (int)cfg('display.keep_hours', 48) . ' Stunden)</h2>';
+    foreach ($ended as $r) {
+        render_status_card($r, true);
+    }
 }
 
-/* Neuer Status */
-$o = fn(string $k, $d = '') => $old[$k] ?? $d;
-echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Neuen Status setzen</h2>';
+/* Neue Meldung */
+$o = !$oldT ? $old : [];
+echo '<div class="card shadow-sm mb-3 mt-4"><div class="card-body"><h2 class="h5">Neue Meldung</h2>';
+echo '<p class="small text-body-secondary">Bestehende Meldungen bleiben dabei bestehen.</p>';
 echo '<form method="post" action="change.php">' . csrf_field() . '<input type="hidden" name="mode" value="set">';
 echo '<label class="form-label" for="sk">Status</label><select class="form-select mb-3" id="sk" name="status_key" required><option value="">– bitte wählen –</option>';
 foreach ($bcm['statuses'] as $s) {
+    if ($s['key'] === $bcm['default_status']) {
+        continue;
+    }
     $tag = $s['audience'] === 'ALLE_UND_ADRESSLISTE' ? ' · mit Standortliste' : '';
-    echo '<option value="' . h($s['key']) . '"' . ($o('status_key') === $s['key'] ? ' selected' : '') . '>'
+    echo '<option value="' . h($s['key']) . '"' . (($o['status_key'] ?? '') === $s['key'] ? ' selected' : '') . '>'
         . h($s['label'] . ' (' . severity_label($s['severity']) . ')' . $tag) . '</option>';
 }
 echo '</select>';
-
-echo '<fieldset class="mb-3"><legend class="form-label fs-6 fw-semibold mb-1">Betroffene Standorte <span class="text-body-secondary small fw-normal">(nur bei Status "mit Standortliste")</span></legend>';
-echo '<div class="form-check"><input class="form-check-input" type="checkbox" id="loc_all" name="loc_all" value="1"' . ($o('loc_all') ? ' checked' : '')
-    . '><label class="form-check-label" for="loc_all">Alle Standorte der Liste</label></div>';
-$sel = (array)($old['loc'] ?? []);
-foreach ($bcm['locations'] as $i => $l) {
-    echo '<div class="form-check"><input class="form-check-input" type="checkbox" id="loc' . (int)$i . '" name="loc[]" value="' . h($l['id']) . '"'
-        . (in_array($l['id'], $sel, true) ? ' checked' : '') . '><label class="form-check-label" for="loc' . (int)$i . '">' . h($l['name'])
-        . ' <span class="text-body-secondary small">(' . h(trim((string)$l['phone']) !== '' ? $l['phone'] : 'Standard: ' . $bcm['default_phone']) . ')</span></label></div>';
-}
-echo '</fieldset>';
-
-$vt = $o('validity_type', 'duration');
-echo '<fieldset class="mb-3"><legend class="form-label fs-6 fw-semibold mb-1">Gültigkeit</legend>';
-echo '<div class="form-check"><input class="form-check-input" type="radio" id="vt_d" name="validity_type" value="duration"' . ($vt === 'duration' ? ' checked' : '')
-    . '><label class="form-check-label" for="vt_d">Dauer</label></div>';
-echo '<select class="form-select mb-2" name="duration" aria-label="Dauer">';
-foreach ($bcm['validity_options_minutes'] as $min) {
-    echo '<option value="' . (int)$min . '"' . ((int)$o('duration', 240) === $min ? ' selected' : '') . '>' . h(fmt_minutes($min)) . '</option>';
-}
-echo '</select>';
-echo '<div class="form-check"><input class="form-check-input" type="radio" id="vt_u" name="validity_type" value="until"' . ($vt === 'until' ? ' checked' : '')
-    . '><label class="form-check-label" for="vt_u">Gültig bis <span class="text-body-secondary small">(' . h((string)cfg('app.timezone')) . ')</span></label></div>';
-echo '<input class="form-control mb-2" type="datetime-local" name="until" aria-label="Gültig bis" value="' . h((string)$o('until')) . '">';
-echo '<div class="form-check"><input class="form-check-input" type="radio" id="vt_x" name="validity_type" value="unlimited"' . ($vt === 'unlimited' ? ' checked' : '')
-    . '><label class="form-check-label" for="vt_x">Unbefristet <span class="text-body-secondary small">(nur wo zulässig)</span></label></div>';
-echo '</fieldset>';
-
-echo '<div class="form-check mb-3"><input class="form-check-input" type="checkbox" id="am" name="alarm_mail" value="1"' . ($o('alarm_mail') ? ' checked' : '')
-    . '><label class="form-check-label" for="am"><strong>ALARM-Mail senden</strong> <span class="text-body-secondary small">(erfordert TOTP-Bestätigung)</span></label></div>';
-echo '<label class="form-label" for="note">Interne Notiz / Anlass <span class="text-body-secondary small">(nur im Protokoll, nicht auf der Statusseite, max. 200 Zeichen)</span></label>';
-echo '<input class="form-control mb-3" id="note" type="text" name="note" maxlength="200" value="' . h((string)$o('note')) . '">';
+echo form_locations($bcm, array_map('strval', (array)($o['loc'] ?? [])), !empty($o['loc_all']), 'n');
+echo form_contacts(array_map('strval', (array)($o['contacts'] ?? [])), 'n');
+echo form_validity($bcm, $o, 'n');
+echo form_alarm($o, 'n', 'ALARM-Mail senden');
+echo form_note($o, 'n');
 echo '<div class="d-grid d-sm-block"><button class="btn btn-primary btn-lg" type="submit" name="action" value="preview">Vorschau</button></div></form></div></div>';
 
 /* Mein Zugang */
@@ -397,7 +503,7 @@ foreach ($bcm['statuses'] as $s) {
 echo '</ul></details>';
 
 /* Verlauf */
-echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Statusverlauf</h2><ul class="list-group list-group-flush">';
+echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Verlauf aller Meldungen</h2><ul class="list-group list-group-flush">';
 foreach ($hist as $r) {
     $lbl = $r['payload']['label'] ?? $r['status_key'];
     $locs = $r['payload'] ? implode(', ', array_column($r['payload']['locations'] ?? [], 'name')) : '';
@@ -405,7 +511,8 @@ foreach ($hist as $r) {
         . '<span class="small text-body-secondary">' . h(fmt_local($r['created_at'])) . '</span></div>'
         . ($locs !== '' ? '<div class="small">' . h($locs) . '</div>' : '')
         . ($r['mac_ok'] ? '' : '<div class="text-danger fw-semibold">Integritätsfehler</div>')
-        . '<div class="small text-body-secondary">von ' . h($r['author']) . ' · gültig bis ' . h(fmt_local($r['valid_until']))
+        . '<div class="small text-body-secondary">#' . (int)status_msg($r) . ' · ' . h(['active' => 'aktiv', 'superseded' => 'abgelöst', 'ended' => 'beendet'][$r['state']] ?? $r['state'])
+        . ' · von ' . h($r['author']) . ' · gültig bis ' . h(fmt_local($r['valid_until']))
         . ' · Alarm: ' . ($r['alarm_mail'] ? 'ja' : 'nein') . ' · gelesen: ' . (int)($views[(int)$r['id']] ?? 0) . '</div></li>';
 }
 echo '</ul></div></div>';

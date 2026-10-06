@@ -5,6 +5,7 @@
  *
  *   php setup.php init                          Master-Key + Cron-Token erzeugen (config.local.inc.php)
  *   php setup.php set-stage1                    Zugangspasswort Stufe 1 setzen
+ *   php setup.php set-stage1-user <name>        Benutzername des gemeinsamen Zugangs
  *   php setup.php add-user <id> "<Name>" <mail> [admin|editor] [--config]
  *                                               Benutzer Stufe 2 anlegen (Passwort + TOTP-Secret), Standard: admin.
  *                                               --config: in config.local.inc.php statt in die DB (Webspace ohne SSH:
@@ -13,8 +14,8 @@
  *   php setup.php reset-password <id>           Einmalpasswort erzeugen (Notfall, z. B. letzter Admin ausgesperrt)
  *   php setup.php disable-user <id> | enable-user <id>
  *   php setup.php migrate-users                 Benutzer aus config.local.inc.php in die Datenbank übernehmen
- *   php setup.php add-recipient <mail>          ALARM-Empfänger (verschlüsselt) hinzufügen
- *   php setup.php list-recipients | remove-recipient <nr>
+ *   php setup.php add-recipient <mail> [kreis]  Adresse in Alarmkreis (verschlüsselt); neuer Kreis wird angelegt
+ *   php setup.php list-circles | remove-recipient <kreis> <nr>
  *   php setup.php set-cc1 <mail>                cc_default_mail1 (Erinnerungen, Audit-Anker) verschlüsselt setzen
  *   php setup.php encrypt-value <text>          beliebigen Konfigurationswert als enc:... verschlüsseln
  *   php setup.php install-db                    Tabellen anlegen
@@ -117,6 +118,13 @@ switch ($cmd) {
         out('Zugangspasswort Stufe 1 gesetzt (verschlüsselt in der Datenbank, wie über System im Browser).');
         break;
 
+    case 'set-stage1-user':
+        if ($e = stage1_user_change((string)($args[0] ?? ''), 'system:cli')) {
+            fail($e);
+        }
+        out('Benutzername des gemeinsamen Zugangs: ' . stage1_user());
+        break;
+
     case 'add-user':
         [$id, $name, $mail] = [strtolower((string)($args[0] ?? '')), (string)($args[1] ?? ''), (string)($args[2] ?? '')];
         $role = (string)($args[3] ?? 'admin');
@@ -201,25 +209,32 @@ switch ($cmd) {
         break;
 
     case 'add-recipient':
-        [$n, $e] = recipients_add((string)($args[0] ?? ''), 'system:cli');
+        $cid = (string)($args[1] ?? (alarm_circles()[0]['id'] ?? 'allgemein'));
+        $known = array_column(alarm_circles(), 'id');
+        $e = in_array($cid, $known, true) ? circle_update($cid, (string)($args[0] ?? ''), [], 'system:cli')
+            : circle_create($cid, (string)($args[0] ?? ''), 'system:cli');
         if ($e) {
             fail($e);
         }
-        out($n > 0 ? 'Empfänger gespeichert (verschlüsselt): ' . mask_email(strtolower((string)$args[0])) : 'Adresse war bereits eingetragen.');
+        out('Empfänger gespeichert (verschlüsselt) im Kreis ' . $cid . ': ' . mask_email(strtolower((string)$args[0])));
         break;
 
     case 'list-recipients':
-        foreach (recipients_web() as $i => $r) {
-            out(sprintf('%2d  %s', $i + 1, mask_email($r)));
-        }
-        foreach (array_diff(alarm_recipients(), recipients_web()) as $r) {
-            out(' -  ' . mask_email($r) . '  (aus config.local.inc.php)');
+    case 'list-circles':
+        foreach (alarm_circles() as $c) {
+            out($c['id'] . '  (' . $c['name'] . ')');
+            foreach ($c['emails'] as $i => $r) {
+                out(sprintf('  %2d  %s', $i + 1, mask_email($r)));
+            }
         }
         break;
 
     case 'remove-recipient':
-        if (!recipients_remove((int)($args[0] ?? 0) - 1, 'system:cli')) {
-            fail('Nummer aus list-recipients angeben (Einträge aus config.local.inc.php dort entfernen).');
+        if (count($args) < 2) {
+            fail('Aufruf: remove-recipient <kreis-id> <nr>  (Nummern aus list-circles)');
+        }
+        if ($e = circle_update((string)$args[0], '', [(int)$args[1] - 1], 'system:cli')) {
+            fail($e);
         }
         out('Empfänger entfernt.');
         break;

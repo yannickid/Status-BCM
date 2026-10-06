@@ -4,19 +4,26 @@
 
 1. Die Adresse der Statusseite aufrufen, z. B. `https://status.ihre-domain.de`. Am besten als Lesezeichen oder auf
    dem Startbildschirm des Smartphones ablegen.
-2. Das **Zugangspasswort** eingeben. Es ist für alle gleich und wird intern bekannt gegeben.
-3. Die Seite zeigt den aktuellen Status:
-   * farbiges Etikett (Normal, Information, Hinweis, Wichtiger Hinweis) und die Meldung,
+2. **Benutzername** und **Passwort** des gemeinsamen Zugangs eingeben (z. B. "Unternehmen"). Beides ist für alle
+   gleich und wird intern bekannt gegeben. Groß- und Kleinschreibung beim Benutzernamen spielen keine Rolle.
+3. Die Seite zeigt **alle gültigen Meldungen**, die wichtigste zuerst (z. B. "Netzwerk eingeschränkt" an Standort A
+   und gleichzeitig "Sicherheitsmaßnahme" an Standort B). Je Meldung:
+   * farbiges Etikett (Information, Hinweis, Wichtiger Hinweis) und der Meldungstext,
    * gegebenenfalls betroffene Standorte mit **Rückrufnummer**. Ein Tipp auf die Nummer startet den Anruf.
+   * gegebenenfalls **Kontakt**: Notfallnummer, E-Mail oder Videokonferenz (Plattform, Link, Konferenz-ID),
    * "Stand" und "Gültig bis".
-4. Die Seite aktualisiert sich alle 2 Minuten von selbst.
+   Gilt keine Meldung, steht dort "Regelbetrieb".
+4. Darunter stehen **ausgegraut** die Meldungen der letzten 48 Stunden, die nicht mehr gelten:
+   * **"Nicht mehr gültig"**: Die Gültigkeit ist abgelaufen.
+   * **"Zurückgenommen / gelöst"**: Die Redaktion hat die Meldung beendet.
+5. Die Seite aktualisiert sich alle 2 Minuten von selbst.
 
-Erscheint "Die angegebene Gültigkeit ist überschritten", wird die Meldung gerade überprüft. Bitte die angegebene
-Rufnummer nutzen.
+## Für die Redaktion: Meldungen setzen
 
-## Für die Redaktion: Status setzen
-
-Menü **Einstellungen** → persönlicher Login (Benutzer + Passwort).
+Auf der Startseite mit der **persönlichen Kennung** und dem eigenen Passwort anmelden. Sie sehen dann die
+Statusseite und zusätzlich das Menü **Einstellungen**, ohne zweites Anmeldeformular. Wer bereits mit dem gemeinsamen
+Zugang angemeldet ist, kann sich auch unter **Einstellungen** persönlich anmelden. Kritische Änderungen (ALARM-Mail,
+kritische Meldungen, Benutzer, System) verlangen weiterhin den TOTP-Code aus der App.
 
 ### Erster Login
 
@@ -29,32 +36,41 @@ Sie haben ein Einmalpasswort erhalten. Beim ersten Login erscheint "Zugang einri
    (Typ "zeitbasiert") oder den Link antippen.
 3. Den aktuellen 6-stelligen Code aus der App eingeben → **Speichern**.
 
-### Neuen Status setzen
+### Neue Meldung
+
+Mehrere Meldungen können gleichzeitig gelten. Eine neue Meldung ersetzt keine bestehende.
 
 1. **Status** wählen. Der Text ist fest vorgegeben; eigene Formulierungen gibt es bewusst nicht.
 2. Bei Status "mit Standortliste": die **betroffenen Standorte** ankreuzen (oder "Alle Standorte der Liste").
-3. **Gültigkeit** festlegen: eine **Dauer** (1 Stunde … 2 Tage) **oder** "Gültig bis" (Datum und Uhrzeit).
-   "Unbefristet" ist nur beim Regelbetrieb möglich.
-4. Optional **ALARM-Mail senden**. Sie geht per BCC an alle hinterlegten Empfänger, an Sie und an die
-   Standard-CC-Adresse.
-5. Optional eine **interne Notiz** (Anlass). Sie steht nur im Protokoll, nie auf der Statusseite.
-6. **Vorschau**: Prüfen Sie die Meldung genau so, wie alle sie sehen werden.
-7. Bei ALARM-Mail oder kritischen Status den **TOTP-Code** aus der App eingeben.
-8. **Verbindlich setzen**. Erst jetzt ändert sich die Statusseite. Mit **Abbrechen** verwerfen Sie die Änderung.
+3. Optional **Kontakt** ankreuzen (Notfallnummer, Funktionspostfach, Videokonferenz). Die Auswahl pflegen Admins unter
+   **System**.
+4. **Gültigkeit** festlegen: eine **Dauer** (1 Stunde … 2 Tage) **oder** "Gültig bis" (Datum und Uhrzeit).
+5. Optional **ALARM-Mail senden** und die **Alarmkreise** wählen (z. B. IT, BOA/Krisenstab, Leitung). "Standortverwaltung
+   der betroffenen Standorte" ist vorausgewählt; ohne Standortliste sind das alle Standortverwaltungen. Die Mail geht
+   per BCC an diese Adressen, an Sie und an die Kopie-Adresse.
+6. Optional eine **interne Notiz** (Anlass). Sie steht nur im Protokoll, nie auf der Statusseite.
+7. **Vorschau**: Prüfen Sie die Meldung genau so, wie alle sie sehen werden. Bei ALARM-Mail stehen dort Betreff-Präfix,
+   Zahl der Empfänger und die gewählten Kreise.
+8. Bei ALARM-Mail oder kritischen Status den **TOTP-Code** aus der App eingeben.
+9. **Verbindlich setzen**. Erst jetzt ändert sich die Statusseite. Mit **Abbrechen** verwerfen Sie die Änderung.
 
 Die Rückmeldung zeigt, an wie viele Adressen die ALARM-Mail zugestellt wurde. Bei Fehlern erscheint ein Hinweis.
 
-### Verlängern oder beenden
+### Verlängern, ändern oder beenden
+
+Unter **Aktuelle Meldungen** steht jede offene Meldung mit ihren eigenen Schaltflächen:
+
+* **Verlängern:** Dauer wählen → Vorschau → verbindlich setzen.
+* **Ändern:** Standorte, Kontakt, Gültigkeit anpassen, optional mit ALARM-Mail (Betreff-Präfix "Aktualisierung").
+* **Beenden (zurückgenommen / gelöst):** optional mit ALARM-Mail (Präfix "Ende") an die gewählten Kreise. Beenden ohne
+  ALARM-Mail braucht keinen TOTP-Code. Die Meldung bleibt 48 Stunden ausgegraut sichtbar.
 
 Läuft die Gültigkeit ab, erhalten Sie (und `cc_default_mail1`) eine **Erinnerungsmail**. Sie wird stündlich
-wiederholt, bis Sie reagieren:
+wiederholt, bis Sie verlängern oder beenden. Bis dahin steht die Meldung als "Nicht mehr gültig" ausgegraut auf der
+Statusseite.
 
-* **Weiterhin gültig:** Unter "Ist der Status noch gültig?" eine Dauer wählen → **Verlängern** → Vorschau →
-  verbindlich setzen.
-* **Nicht mehr gültig:** **Status beenden** → Vorschau → verbindlich setzen. Danach gilt wieder "Regelbetrieb".
-
-Jeder Wechsel bleibt im **Statusverlauf** erhalten, mit Autor, Gültigkeit, ALARM ja/nein und "gelesen"
-(Anzahl der Sitzungen, die den Status gesehen haben).
+Jede Version bleibt im **Verlauf aller Meldungen** erhalten, mit Meldungsnummer, Autor, Gültigkeit, ALARM ja/nein und
+"gelesen" (Anzahl der Sitzungen, die die Meldung gesehen haben).
 
 ### Passwort ändern
 
@@ -86,7 +102,7 @@ für die nächste Aktion warten Sie bis zum nächsten Code (höchstens 30 Sekund
 | Benutzer anlegen | Kennung (z. B. `mmuster`), Name, E-Mail, Rolle → TOTP → **Anlegen**. Das **Einmalpasswort** erscheint nur einmal oben auf der Seite. Übergeben Sie es persönlich oder telefonisch, **nicht per E-Mail**. |
 | Passwort vergessen | Aktionen → **Passwort zurücksetzen** → neues Einmalpasswort übergeben |
 | Smartphone verloren/gewechselt | Aktionen → **Authenticator-App neu koppeln**. Beim nächsten Login wird die App neu eingerichtet. |
-| Rolle ändern | **Redaktion** (Status setzen) oder **Admin** (zusätzlich Benutzerverwaltung) |
+| Rolle ändern | **Redaktion** (Meldungen setzen) oder **Admin** (zusätzlich Benutzerverwaltung) |
 | Person verlässt die Organisation | **Deaktivieren**. Der Zugang endet sofort. Benutzer werden nicht gelöscht, damit das Protokoll nachvollziehbar bleibt. |
 
 Die Liste zeigt je Benutzer: Rolle, ob die TOTP-App gekoppelt ist, wann das Passwort gesetzt wurde, wie lange es gilt
@@ -96,7 +112,7 @@ Oben sehen Sie außerdem, wann das **gemeinsame Zugangspasswort** (Stufe 1) zule
 unter **System**.
 
 **Empfehlung:** Mindestens **zwei Admins** und mindestens **zwei Personen je Schicht bzw. Bereitschaft** mit
-Redaktionsrechten, damit im Ernstfall immer jemand den Status setzen kann.
+Redaktionsrechten, damit im Ernstfall immer jemand eine Meldung setzen kann.
 
 ## System (Admins)
 
@@ -106,9 +122,12 @@ Menü **System** (nur Admins). Änderungen verlangen Ihren TOTP-Code und stehen 
 |---|---|
 | Prüfung | alle Punkte von Konfiguration, Datenbank, Benutzern, Empfängern, Cron, Protokoll-Kette (mit Kopf-Hash) und Meldungstexten. "offen" heißt: bitte ansehen |
 | Cron | die Adresse für den Cronjob beim Hoster und "Jetzt einmal ausführen" |
-| ALARM-Empfänger | Adressen hinzufügen (eine je Zeile) oder entfernen; sichtbar nur maskiert |
+| Alarmkreise | Kreise wie IT, BOA/Krisenstab, Leitung anlegen oder löschen; Adressen hinzufügen (eine je Zeile) oder per Haken entfernen. Sichtbar nur maskiert |
+| Standorte | Name, Durchwahl und **E-Mail der Standortverwaltung** je Außenstelle. Name und Durchwahl erscheinen auf der Statusseite, die Adressen nie (nur maskiert unter System) |
+| Kontakte für Meldungen | Notfallnummer, E-Mail, Videokonferenz (Plattform, https-Link, Konferenz-ID/PIN). Für alle Beschäftigten sichtbar, sobald einer Meldung zugeordnet |
+| Betreff-Präfixe | Präfix der ALARM-Mail für "Neuer Alarm", "Aktualisierung" und "Ende", z. B. `[ALARM]` |
 | Kopie-Adresse | `cc_default_mail1` ändern (Erinnerungen, Kopie der ALARM-Mails, Audit-Anker) |
-| Zugangspasswort für alle | Stufe 1 wechseln; gilt sofort für neue Anmeldungen. Danach intern bekannt geben |
+| Gemeinsamer Zugang für alle | Benutzername (z. B. "Unternehmen") und Zugangspasswort (Stufe 1) ändern; gilt sofort für neue Anmeldungen. Danach intern bekannt geben. Der Name darf keiner persönlichen Kennung gleichen |
 | Mailversand testen | Testmail an Ihre eigene Adresse |
 | Anmeldungen je Tag | 30 Tage, Stufe 1 / Stufe 2 / Fehlversuche |
 
@@ -120,9 +139,10 @@ Hat der einzige Admin Passwort und Smartphone verloren, hilft der Notfallzugang,
 ```
 STATUS-BCM – KURZKARTE
 1. Einstellungen → persönlich anmelden
-2. Status + ggf. Standorte + Dauer wählen
-3. ALARM-Mail? nur wenn alle sofort informiert werden müssen
+2. Neue Meldung: Status + ggf. Standorte + Kontakt + Dauer
+3. ALARM-Mail? nur die nötigen Alarmkreise wählen
 4. Vorschau prüfen → TOTP-Code → Verbindlich setzen
 5. Erinnerung kommt bei Ablauf → Verlängern oder Beenden
+6. Erledigt? Beenden (zurückgenommen / gelöst)
 Kein Zugriff? Rückfallweg: Telefonkette / Aushang
 ```
