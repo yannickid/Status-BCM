@@ -12,6 +12,7 @@ if (PHP_SAPI !== 'cli') {
 
 $tmp = sys_get_temp_dir() . '/sbcm-selftest-' . bin2hex(random_bytes(4));
 mkdir($tmp, 0700, true);
+ini_set('error_log', $tmp . '/php-error.log'); // erwartete Integritätsmeldungen nicht auf die Konsole
 $local = $tmp . '/config.local.inc.php';
 $totpSecret = b32_for_test();
 file_put_contents($local, "<?php\nreturn " . var_export([
@@ -233,6 +234,41 @@ ok($st['periods']['heute']['s1'] === 2 && $st['periods']['heute']['s2'] === ['an
 ok($st['last']['anna'] !== null && count($st['days']) === 1, 'Login-Statistik: letzte Anmeldung und Tageswerte');
 ok(audit_verify()['ok'], 'Audit-Kette nach Statistik-Einträgen intakt');
 
+/* --- Benutzerverwaltung (DB-Benutzer, Zeilen-MAC, Passwort-Gültigkeit) --- */
+$once = account_action('create', 'bert', ['name' => 'Bert Redaktion', 'email' => 'bert@test.example', 'role' => 'editor'], 'anna', ['totp' => true]);
+$bert = users()['bert'] ?? null;
+ok(is_string($once) && strlen($once) === 19 && $bert && $bert['role'] === 'editor' && $bert['must_change'], 'Benutzer angelegt: Einmalpasswort, Rolle Redaktion, Wechselpflicht');
+ok(user_needs_setup(['id' => 'bert'] + $bert) && verify_user('bert', $once) !== null, 'Einmalpasswort gilt nur für die Ersteinrichtung');
+ok(throws(fn() => account_action('create', 'bert', ['name' => 'X', 'email' => 'x@test.example'], 'anna')), 'Doppelte Kennung abgelehnt');
+ok(password_policy('kurz', 'bert') !== [] && password_policy('bert-ist-super-123', 'bert') !== [] && password_policy('Sonnenblume am Fenster 7', 'bert') === [],
+    'Passwortregeln: Länge, kein Benutzername');
+account_action('set_pw', 'bert', ['hash' => password_hash('Sonnenblume am Fenster 7', PASSWORD_DEFAULT)], 'bert');
+account_action('set_totp', 'bert', ['totp_b32' => 'JBSWY3DPEHPK3PXQ'], 'bert');
+$bert = users()['bert'];
+ok(!$bert['must_change'] && !user_needs_setup($bert) && $bert['pw_valid_until'] !== null && pw_state($bert) === 'ok', 'Nach Einrichtung: gültiges Passwort mit Ablaufdatum');
+$rawAcc = (string)json_encode(db()->query('SELECT * FROM ' . t('account'))->fetchAll());
+ok(!str_contains($rawAcc, 'bert@test.example') && !str_contains($rawAcc, 'JBSWY3DPEHPK3PXQ'), 'E-Mail und TOTP-Secret liegen verschlüsselt in der DB');
+db()->exec('UPDATE ' . t('account') . " SET role = 'admin' WHERE id = 'bert'");
+ok(!isset(users(false, true)['bert']) && !users(true)['bert']['mac_ok'], 'Rolle direkt in der DB geändert -> Benutzer gesperrt (MAC)');
+db()->exec('UPDATE ' . t('account') . " SET role = 'editor' WHERE id = 'bert'");
+ok(isset(users(false, true)['bert']), 'Nach Rückgängigmachen wieder gültig');
+ok(throws(fn() => db()->exec('DELETE FROM ' . t('account'))), 'DB-Trigger verhindert das Löschen von Benutzern');
+account_action('disable', 'bert', [], 'anna');
+ok(verify_user('bert', 'Sonnenblume am Fenster 7') === null, 'Deaktivierter Benutzer kann sich nicht anmelden');
+account_action('enable', 'bert', [], 'anna');
+ok(throws(fn() => account_action('reset_pw', 'anna', [], 'bert')), 'Konfig-Benutzer sind in der Weboberfläche nicht änderbar');
+$rec = audit_recent(1)[0];
+ok($rec['action'] === 'user.enable' && $rec['actor'] === 'anna' && audit_verify()['ok'], 'Benutzeränderungen im Audit-Log');
+// Ablauf und Erinnerung: Gültigkeit künstlich (mit gültigem MAC) auf morgen setzen
+account_write('bert', ['pw_valid_until' => gmdate('Y-m-d H:i:s', time() + 86400)], false, 'test');
+ok(pw_state(users()['bert']) === 'soon', 'Passwort läuft bald ab');
+$pl = password_reminders(time());
+ok(count(array_filter($pl, fn($l) => str_contains($l, 'Passwort-Erinnerung bert'))) === 1, 'Cron: Passwort-Erinnerung versendet');
+ok(password_reminders(time() + 3600) === [], 'Keine Wiederholung vor Ablauf des Intervalls');
+ok(count(password_reminders(time() + 8 * 86400)) === 1 && pw_state(users()['bert'], time() + 2 * 86400) === 'expired', 'Wiederholung nach 7 Tagen, danach abgelaufen');
+account_write('bert', ['pw_valid_until' => gmdate('Y-m-d H:i:s', time() - 60)], false, 'test');
+ok(user_needs_setup(users()['bert']) && verify_user('bert', 'Sonnenblume am Fenster 7') !== null, 'Abgelaufen: Login möglich, aber Wechsel erzwungen');
+
 /* --- Throttle --- */
 for ($i = 0; $i < 5; $i++) {
     throttle_record('s2', 'anna', false);
@@ -242,10 +278,10 @@ ok(throttle_locked('s1') === 0, 'Sperre gilt nur für den betroffenen Bereich');
 
 /* --- Aufräumen --- */
 if (db_driver() === 'mysql') {
-    foreach (['audit_no_upd', 'audit_no_del', 'status_no_del'] as $tr) {
+    foreach (['audit_no_upd', 'audit_no_del', 'status_no_del', 'account_no_del'] as $tr) {
         try { db()->exec('DROP TRIGGER ' . t($tr)); } catch (Throwable $e) { }
     }
-    foreach (['status', 'audit', 'mail_log', 'login_attempt', 'totp_used', 'kv'] as $tb) {
+    foreach (['status', 'audit', 'mail_log', 'login_attempt', 'totp_used', 'kv', 'view_count', 'account'] as $tb) {
         db()->exec('DROP TABLE IF EXISTS ' . t($tb));
     }
 }

@@ -198,6 +198,19 @@
         "{change_url}"
       ]
     },
+    "password": {
+      "subject": "Passwort erneuern",
+      "body": [
+        "Guten Tag {name},",
+        "",
+        "{what} {phrase}.",
+        "",
+        "Bitte ändern Sie es rechtzeitig unter \"Einstellungen > Mein Zugang\":",
+        "{url}",
+        "",
+        "Diese Erinnerung wird wiederholt, bis das Passwort geändert wurde."
+      ]
+    },
     "anchor": {
       "subject": "Status-BCM Audit-Anker {date}",
       "body": [

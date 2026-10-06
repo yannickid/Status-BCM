@@ -79,8 +79,9 @@ $config = [
         // password_hash()-Wert – `php setup.php set-stage1`
         'stage1_hash' => '',
 
-        // Login Stufe 2 (personenbezogen): id => [name, email, hash, totp_secret]
-        // – `php setup.php add-user <id> "<Name>" <email>`
+        // Login Stufe 2: Benutzer stehen in der Datenbank (admin.php, `php setup.php add-user`).
+        // Hier nur für Webspaces ohne SSH der erste Admin (`php setup.php add-user ... --config` lokal ausführen):
+        // id => [name, email, hash, totp_secret, pw_set_at]
         'users' => [],
 
         'max_failures'         => 5,     // Fehlversuche pro IP und Zeitfenster
@@ -91,6 +92,16 @@ $config = [
         'absolute_hours'       => 10,    // harte Session-Obergrenze
         'pending_ttl_seconds'  => 300,   // Gültigkeit der Vorschau vor dem Bestätigen
         'totp_window'          => 1,     // ±1 Zeitschritt (30 s) Toleranz
+        // Passwörter Stufe 2 (Benutzerverwaltung admin.php). BSI IT-Grundschutz verlangt keinen regelmäßigen
+        // Zwangswechsel mehr (Wechsel bei Anlass); 0 = unbefristet. Abgelaufen = Login möglich, aber sofortiger Wechsel
+        // (keine Aussperrung im Ernstfall).
+        'password_max_age_days'          => 365,
+        'password_remind_days'           => 14,   // Erinnerung so viele Tage vor Ablauf
+        'password_reminder_repeat_days'  => 7,    // Wiederholung bis geändert
+        'password_min_length'            => 12,   // nie unter 12
+        // Gemeinsames Passwort Stufe 1: Datum setzt `php setup.php set-stage1`; Erinnerung an cc_default_mail1
+        'stage1_set_at'                  => '',
+        'stage1_max_age_days'            => 365,
         // true = TOTP bei JEDER Änderung (auch Entwarnung); sonst nur lt. config.json / bei ALARM-Mail
         'totp_enforce_all'     => false,
     ],
