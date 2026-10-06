@@ -15,7 +15,9 @@ ohne Composer und ohne externe Dienste.
 | `status.php` | aktueller Status nach Login Stufe 1 |
 | `change.php` | Einstellungen nach **Login Stufe 2** (persönlich), Vorschau, TOTP, Verlauf, Protokoll |
 | `cron.php` | Erinnerungen bei abgelaufener Gültigkeit, Audit-Anker, Aufräumen |
-| `lib.inc.php` | gesamte Logik (Krypto, DB, Audit, Auth, TOTP, SMTP) |
+| `lib.inc.php` | gesamte Logik (Krypto, DB, Audit, Auth, TOTP, SMTP, Nutzungsstatistik) |
+| `assets/bootstrap.min.css` | Bootstrap 5.3.8, lokal (kein CDN, kein JavaScript), Lizenz in `assets/bootstrap.LICENSE` |
+| `assets/app.css` | eigenes Design (Mobile First), ergänzt Bootstrap |
 | `setup.php` | CLI-Einrichtung (Schlüssel, Passwörter, Benutzer, Empfänger, Prüfungen) |
 | `tests/selftest.php` | automatischer Selbsttest (SQLite, optional MySQL/MariaDB) |
 | `tests/webtest.php` | Ablauftest über HTTP mit dem eingebauten Webserver (`php -S`) |
@@ -79,12 +81,29 @@ Cron (alle 5 Minuten), je nach Hoster eine der beiden Varianten:
 * **Ziel-Adressen geschützt:** nur in `config.local.inc.php` (verschlüsselt per `add-recipient`), Versand ausschließlich
   per BCC, in der Oberfläche und im Protokoll nur maskiert (`m****@e***.de`) bzw. als Anzahl.
 * **Brute-Force-Bremse** je IP und Benutzer, verzögerte Fehlantworten, Session-Cookie `HttpOnly`/`SameSite=Strict`/
-  `Secure`, Session-Erneuerung beim Login, Leerlauf-Timeouts, CSRF-Token, strenge CSP ohne JavaScript.
+  `Secure`, Session-Erneuerung beim Login, Leerlauf-Timeouts, CSRF-Token, strenge CSP ohne JavaScript (`style-src 'self'`, keine Inline-Styles).
 * **SMTP:** eigener Client mit STARTTLS/SSL und Zertifikatsprüfung; Zugangsdaten gehen nie unverschlüsselt über das Netz.
 * **Konfig-Schutz:** `.htaccess` sperrt `config*.php`, `lib.inc.php`, `config.json`, `setup.php`, versteckte Dateien sowie
   `tests/` und `storage/`; alle `.inc.php`-Dateien liefern bei Direktaufruf zusätzlich nur 403. **Auf nginx wirkt
   `.htaccess` nicht** – dort `config.json` und `storage/` per Pfad (`app.json_path`, `app.storage_dir`) aus dem Webroot
   verlegen.
+
+## Design und Datenverbrauch
+
+* **Mobile First** mit Bootstrap 5.3 (nur CSS). Basis ist die Smartphone-Ansicht, ab 576 px werden Schrift und Buttons
+  angepasst. Keine Inline-Styles, kein JavaScript, keine externen Schriften oder CDNs.
+* Bootstrap liegt unverändert in `assets/` (≈ 31 KB komprimiert) und wird per `.htaccess` gzip-komprimiert und ein Jahr
+  gecacht (`?v=` im Link sorgt beim Update für Neuladen). Danach überträgt eine Statusseite nur noch ≈ 3 KB HTML.
+* Die Statusseite lädt sich alle 2 Minuten neu.
+
+## Nutzung auswerten
+
+* **Login-Häufigkeit:** In `change.php` unter "Nutzung" (heute / 7 / 30 Tage) und per `php setup.php stats [Tage]`
+  mit Tageswerten. Die Zahlen kommen aus dem Audit-Log (`login1.ok`, `login2.ok`, `login2.fail`), es wird nichts
+  zusätzlich gespeichert. Stufe 1 zählt Anmeldungen, nicht Personen (gemeinsames Passwort); Stufe 2 zählt je Benutzer
+  inkl. letzter Anmeldung.
+* **Lesezähler:** Je Status wird gezählt, in wie vielen Sitzungen er angesehen wurde (einmal pro Sitzung, nur
+  Status-ID + Tag, keine IP, kein Cookie über die Sitzung hinaus). Sichtbar im Statusverlauf ("gelesen: n").
 
 ## Pressetaugliche Meldungstexte
 

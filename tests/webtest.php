@@ -118,6 +118,14 @@ try {
     ok(str_contains($csp, "default-src 'none'") && !str_contains($csp, 'script-src') && !str_contains($b, '<script'),
         'Strenge CSP, kein JavaScript');
     ok(!str_contains($b, 'Regelbetrieb') && !str_contains($b, 'Standort'), 'Vor dem Login keine Statusinhalte');
+    ok(str_contains($csp, "style-src 'self'") && !preg_match('/<style|style="/', $b), 'Keine Inline-Styles (CSP style-src self)');
+    ok(str_contains($b, 'assets/bootstrap.min.css?v=') && str_contains($b, 'assets/app.css?v=') && str_contains($b, 'width=device-width'),
+        'Lokales Bootstrap + app.css eingebunden, Viewport für Mobilgeräte');
+    [$c, $h, $css] = req('GET', "$base/assets/bootstrap.min.css");
+    ok($c === 200 && str_contains($css, 'Bootstrap  v5.3.8') && str_contains($h['content-type'] ?? '', 'text/css'), 'bootstrap.min.css wird lokal ausgeliefert');
+    [$c, , $css] = req('GET', "$base/assets/app.css");
+    ok($c === 200 && str_contains($css, '.status-card'), 'app.css wird ausgeliefert');
+    ok(strlen($b) < 4000, 'Login-Seite ist schlank (' . strlen($b) . ' Byte HTML)');
     [$c, , $b] = req('GET', "$base/robots.txt");
     ok($c === 200 && str_contains($b, 'Disallow: /'), 'robots.txt sperrt alles');
     [$c] = req('GET', "$base/status.php", [], $jar);
@@ -192,6 +200,12 @@ try {
         'Statusseite zeigt neuen Status mit Standort und Durchwahl');
     ok(str_contains($b2, 'Standort Nürnberg Mitte') && str_contains($b2, '+49 30 12345-0'), 'Standort ohne Durchwahl zeigt default_phone');
     ok(!str_contains($b2, 'Übung Leitstelle'), 'Interne Notiz erscheint nicht auf der Statusseite');
+    req('GET', "$base/status.php", [], $jar2);
+    [, , $b] = req('GET', "$base/change.php", [], $jar);
+    ok(str_contains($b, 'gelesen: 1'), 'Lesezähler zählt den Aufruf einmal je Sitzung');
+    ok(preg_match('#Stufe 1 \(gemeinsames Passwort\)</td><td class="text-end">2</td>#', $b) === 1, 'Nutzung zeigt Anmeldungen Stufe 1');
+    ok(str_contains($b, 'Stufe 2: Anna Test'), 'Nutzung zeigt Anmeldungen Stufe 2 je Benutzer');
+    ok(!preg_match('/<style|style="/', $b), 'Auch Stufe 2 ohne Inline-Styles');
 
     // Replay: gleicher Code für die nächste Änderung
     req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'preview', 'mode' => 'extend', 'validity_type' => 'duration', 'duration' => '60'], $jar);

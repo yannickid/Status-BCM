@@ -31,6 +31,23 @@ DirectoryIndex index.php
     RedirectMatch 404 /(tests|storage)(/|$)
 </IfModule>
 
+# Wenig Traffic: CSS komprimieren und lange cachen (Dateien werden über ?v=... versioniert)
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/css
+</IfModule>
+<IfModule mod_headers.c>
+    <FilesMatch "\.css$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+        Header set X-Content-Type-Options "nosniff"
+    </FilesMatch>
+</IfModule>
+<IfModule !mod_headers.c>
+    <IfModule mod_expires.c>
+        ExpiresActive On
+        ExpiresByType text/css "access plus 1 year"
+    </IfModule>
+</IfModule>
+
 # HTTPS erzwingen (Zeile aktivieren, wenn das Hosting HTTPS anbietet)
 # <IfModule mod_rewrite.c>
 #   RewriteEngine On

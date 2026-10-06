@@ -405,7 +405,8 @@ function db(): PDO
     $pdo = $p;
     if (cfg('db.auto_install', true)) {
         try {
-            $pdo->query('SELECT 1 FROM ' . t('kv') . ' LIMIT 1')->fetchAll();
+            // jüngste Tabelle prüfen – fehlt sie, werden fehlende Tabellen ergänzt (alles IF NOT EXISTS)
+            $pdo->query('SELECT 1 FROM ' . t('view_count') . ' LIMIT 1')->fetchAll();
         } catch (Throwable $e) {
             install_schema($pdo);
         }
@@ -462,6 +463,7 @@ function install_schema(PDO $pdo): void
     $l = t('login_attempt');
     $u = t('totp_used');
     $k = t('kv');
+    $vc = t('view_count');
 
     if ($drv === 'mysql') {
         $tail = ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
@@ -496,6 +498,9 @@ function install_schema(PDO $pdo): void
             )$tail",
             "CREATE TABLE IF NOT EXISTS $k (
                 k VARCHAR(64) NOT NULL, v TEXT NOT NULL, PRIMARY KEY (k)
+            )$tail",
+            "CREATE TABLE IF NOT EXISTS $vc (
+                status_id BIGINT NOT NULL, day CHAR(10) NOT NULL, n INT NOT NULL DEFAULT 0, PRIMARY KEY (status_id, day)
             )$tail",
         ];
         $triggers = [
@@ -532,6 +537,7 @@ function install_schema(PDO $pdo): void
             "CREATE INDEX IF NOT EXISTS {$l}_scope_ts ON $l (scope, ts)",
             "CREATE TABLE IF NOT EXISTS $u (user TEXT NOT NULL, step INTEGER NOT NULL, PRIMARY KEY (user, step))",
             "CREATE TABLE IF NOT EXISTS $k (k TEXT NOT NULL PRIMARY KEY, v TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS $vc (status_id INTEGER NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (status_id, day))",
         ];
         $triggers = [
             "CREATE TRIGGER {$a}_no_upd BEFORE UPDATE ON $a BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END",
@@ -610,15 +616,8 @@ function req_ctx(): array
     ];
 }
 
-function csp_nonce(): string
-{
-    static $n = null;
-    return $n ??= rtrim(strtr(base64_encode(random_bytes(16)), '+/', '-_'), '=');
-}
-
 function send_security_headers(): void
 {
-    $n = csp_nonce();
     header('X-Robots-Tag: noindex, nofollow, noarchive, nosnippet');
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
@@ -627,7 +626,8 @@ function send_security_headers(): void
     header('Referrer-Policy: no-referrer');
     header('Cross-Origin-Opener-Policy: same-origin');
     header('Permissions-Policy: geolocation=(), camera=(), microphone=()');
-    header("Content-Security-Policy: default-src 'none'; style-src 'nonce-$n'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    // Nur eigene Stylesheets (Bootstrap + app.css), data:-SVGs für Bootstrap-Formularsymbole, kein JavaScript.
+    header("Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     if (is_https()) {
         header('Strict-Transport-Security: max-age=31536000');
     }
@@ -1262,6 +1262,90 @@ function parse_change_request(array $in, ?array $current): array
 }
 
 /* ====================================================================== */
+/* Nutzung: anonymer Lesezähler, Login-Statistik aus dem Audit-Log        */
+/* ====================================================================== */
+
+/** Zählt eine Ansicht des Status – einmal je Sitzung und Status, ohne IP/Person (nur Status-ID + Tag). */
+function view_count(int $statusId): void
+{
+    if (!empty($_SESSION['seen'][$statusId])) {
+        return;
+    }
+    $_SESSION['seen'][$statusId] = 1;
+    $day = (new DateTimeImmutable('now', app_tz()))->format('Y-m-d');
+    $up = db()->prepare('UPDATE ' . t('view_count') . ' SET n = n + 1 WHERE status_id = ? AND day = ?');
+    $up->execute([$statusId, $day]);
+    if ($up->rowCount() === 0) {
+        try {
+            db()->prepare('INSERT INTO ' . t('view_count') . ' (status_id, day, n) VALUES (?, ?, 1)')->execute([$statusId, $day]);
+        } catch (PDOException $e) {
+            $up->execute([$statusId, $day]); // parallel angelegt
+        }
+    }
+}
+
+/** Ansichten je Status: [status_id => Summe] */
+function view_totals(array $statusIds): array
+{
+    $out = array_fill_keys(array_map('intval', $statusIds), 0);
+    if (!$out) {
+        return [];
+    }
+    $q = db()->prepare('SELECT status_id, SUM(n) AS s FROM ' . t('view_count') . ' WHERE status_id IN ('
+        . implode(',', array_fill(0, count($out), '?')) . ') GROUP BY status_id');
+    $q->execute(array_keys($out));
+    foreach ($q as $r) {
+        $out[(int)$r['status_id']] = (int)$r['s'];
+    }
+    return $out;
+}
+
+/**
+ * Login-Statistik aus dem Audit-Log (Aktion, Akteur und Zeit liegen unverschlüsselt, aber HMAC-gesichert vor).
+ * Rückgabe: periods (heute / 7 Tage / $days Tage) mit s1, s2 [Benutzer => Anzahl], fail;
+ *           last [Benutzer => letzte Anmeldung UTC|null]; days [Y-m-d => s1, s2, fail] (neueste zuerst).
+ */
+function login_stats(int $days = 30, ?int $nowTs = null): array
+{
+    $tz = app_tz();
+    $today = (new DateTimeImmutable('@' . ($nowTs ?? time())))->setTimezone($tz)->setTime(0, 0);
+    $cut = ['heute' => $today, '7 Tage' => $today->modify('-6 days'), "$days Tage" => $today->modify('-' . ($days - 1) . ' days')];
+    $since = end($cut)->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+    $periods = [];
+    foreach ($cut as $k => $_) {
+        $periods[$k] = ['s1' => 0, 's2' => [], 'fail' => 0];
+    }
+    $daysOut = [];
+    $q = db()->prepare('SELECT ts, action, actor FROM ' . t('audit') . ' WHERE ts >= ? AND action IN (?,?,?) ORDER BY seq');
+    $q->execute([$since, 'login1.ok', 'login2.ok', 'login2.fail']);
+    foreach ($q as $r) {
+        $local = (new DateTimeImmutable((string)$r['ts'], new DateTimeZone('UTC')))->setTimezone($tz);
+        $d = $local->format('Y-m-d');
+        $daysOut[$d] ??= ['s1' => 0, 's2' => 0, 'fail' => 0];
+        $kind = $r['action'] === 'login1.ok' ? 's1' : ($r['action'] === 'login2.ok' ? 's2' : 'fail');
+        $daysOut[$d][$kind]++;
+        foreach ($cut as $k => $from) {
+            if ($local < $from) {
+                continue;
+            }
+            if ($kind === 's2') {
+                $periods[$k]['s2'][$r['actor']] = ($periods[$k]['s2'][$r['actor']] ?? 0) + 1;
+            } else {
+                $periods[$k][$kind]++;
+            }
+        }
+    }
+    $last = [];
+    $q = db()->prepare('SELECT ts FROM ' . t('audit') . ' WHERE action = ? AND actor = ? ORDER BY seq DESC LIMIT 1');
+    foreach (array_keys(users()) as $id) {
+        $q->execute(['login2.ok', $id]);
+        $last[$id] = $q->fetchColumn() ?: null;
+    }
+    krsort($daysOut);
+    return ['periods' => $periods, 'last' => $last, 'days' => $daysOut];
+}
+
+/* ====================================================================== */
 /* E-Mail (eigener SMTP-Client, keine Abhängigkeiten)                     */
 /* ====================================================================== */
 
@@ -1707,34 +1791,15 @@ function run_cron(?int $nowTs = null): array
 }
 
 /* ====================================================================== */
-/* HTML-Layout (ohne JavaScript)                                          */
+/* HTML-Layout (Bootstrap 5.3 lokal, nur CSS, ohne JavaScript)            */
 /* ====================================================================== */
 
-function page_css(): string
+const SBCM_BOOTSTRAP = '5.3.8';
+
+function asset_url(string $file): string
 {
-    return <<<'CSS'
-:root{--bg:#f3f5f7;--fg:#1b1f23;--card:#fff;--muted:#5a6672;--line:#d3d9df;--ok:#1e7a3c;--info:#1f5fa8;--warn:#a35f00;--critical:#b3261e;--accent:#1f4f8f}
-@media (prefers-color-scheme:dark){:root{--bg:#14171a;--fg:#e8ebee;--card:#1d2226;--muted:#9aa6b1;--line:#333b42;--ok:#4cc27a;--info:#6fa8ee;--warn:#e0a24a;--critical:#f0786f;--accent:#7fb0ee}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-.wrap{max-width:780px;margin:0 auto;padding:16px}
-h1{font-size:1.4rem;margin:.2em 0 .6em}h2{font-size:1.1rem;margin:0 0 .6em}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:14px 0}
-.banner{border-left:10px solid var(--c);padding-left:14px}
-.sev-ok{--c:var(--ok)}.sev-info{--c:var(--info)}.sev-warn{--c:var(--warn)}.sev-critical{--c:var(--critical)}
-.badge{display:inline-block;border:2px solid var(--c);color:var(--c);border-radius:6px;padding:0 .5em;font-weight:700;font-size:.85rem;text-transform:uppercase;letter-spacing:.03em}
-.big{font-size:1.5rem;font-weight:700;margin:.3em 0}.muted{color:var(--muted);font-size:.9rem}
-.msg{padding:.6em .9em;border-radius:8px;margin:10px 0;border:1px solid var(--line)}
-.msg.err{border-color:var(--critical);color:var(--critical)}.msg.ok{border-color:var(--ok);color:var(--ok)}.msg.warn{border-color:var(--warn);color:var(--warn)}
-label{display:block;margin:.7em 0 .2em;font-weight:600}
-input[type=text],input[type=password],input[type=datetime-local],select,textarea{width:100%;font:inherit;padding:.55em .7em;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
-input[type=checkbox],input[type=radio]{margin-right:.4em}.inl{font-weight:400;display:block;margin:.25em 0}
-select.auto,input.auto{width:auto}.inl.gap{margin-top:1em}
-button{font:inherit;padding:.6em 1.1em;border-radius:8px;border:1px solid var(--accent);background:var(--card);color:var(--accent);cursor:pointer;margin:.6em .4em 0 0}
-button.primary{background:var(--accent);color:#fff}button.danger{border-color:var(--critical);color:var(--critical)}
-table{width:100%;border-collapse:collapse;font-size:.92rem}th,td{text-align:left;padding:.4em .5em;border-bottom:1px solid var(--line);vertical-align:top}
-nav{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:6px}nav a{color:var(--accent)}nav form{margin-left:auto}nav button{margin:0}
-.hp{position:absolute;left:-9999px;height:0;overflow:hidden}a{color:var(--accent)}code{background:var(--bg);padding:.1em .3em;border-radius:4px}
-CSS;
+    $v = $file === 'bootstrap.min.css' ? SBCM_BOOTSTRAP : (string)(@filemtime(__DIR__ . '/assets/' . $file) ?: SBCM_VERSION);
+    return 'assets/' . $file . '?v=' . rawurlencode($v);
 }
 
 function page_start(string $title, array $o = []): void
@@ -1745,29 +1810,42 @@ function page_start(string $title, array $o = []): void
     if (!empty($o['refresh'])) {
         echo '<meta http-equiv="refresh" content="' . (int)$o['refresh'] . '">';
     }
-    echo '<title>' . h($title) . '</title><style nonce="' . h(csp_nonce()) . '">' . page_css() . '</style></head><body><div class="wrap">';
+    echo '<title>' . h($title) . '</title>';
+    echo '<link rel="stylesheet" href="' . h(asset_url('bootstrap.min.css')) . '">';
+    echo '<link rel="stylesheet" href="' . h(asset_url('app.css')) . '">';
+    echo '</head><body class="bg-body-tertiary"><main class="container app-wrap py-3">';
 }
 
 function page_end(): void
 {
-    echo '</div></body></html>';
+    echo '</main></body></html>';
 }
 
 function nav(string $active, bool $showLogout = true): void
 {
-    echo '<nav><strong>' . h((string)cfg('app.title', 'Status')) . '</strong>';
-    echo '<a href="status.php"' . ($active === 'status' ? ' aria-current="page"' : '') . '>Status</a>';
-    echo '<a href="change.php"' . ($active === 'change' ? ' aria-current="page"' : '') . '>Einstellungen</a>';
-    if ($showLogout) {
-        echo '<form method="post" action="index.php">' . csrf_field() . '<input type="hidden" name="action" value="logout"><button type="submit">Abmelden</button></form>';
+    echo '<header class="d-flex flex-wrap align-items-center gap-2 mb-3 pb-2 border-bottom">';
+    echo '<p class="app-title fw-bold me-auto">' . h((string)cfg('app.title', 'Status')) . '</p>';
+    echo '<nav class="nav nav-pills">';
+    foreach (['status' => ['status.php', 'Status'], 'change' => ['change.php', 'Einstellungen']] as $k => [$href, $label]) {
+        echo '<a class="nav-link py-1 px-2' . ($active === $k ? ' active" aria-current="page' : '') . '" href="' . $href . '">' . $label . '</a>';
     }
     echo '</nav>';
+    if ($showLogout) {
+        echo '<form method="post" action="index.php" class="m-0">' . csrf_field()
+            . '<input type="hidden" name="action" value="logout"><button class="btn btn-outline-secondary btn-sm" type="submit">Abmelden</button></form>';
+    }
+    echo '</header>';
+}
+
+function alert_class(string $type): string
+{
+    return ['ok' => 'success', 'err' => 'danger', 'warn' => 'warning', 'info' => 'info'][$type] ?? 'secondary';
 }
 
 function render_flash(): void
 {
     foreach (flash_take() as [$type, $msg]) {
-        echo '<div class="msg ' . h($type) . '" role="status">' . h($msg) . '</div>';
+        echo '<div class="alert alert-' . alert_class((string)$type) . '" role="status">' . h($msg) . '</div>';
     }
 }
 
@@ -1776,7 +1854,13 @@ function severity_label(string $sev): string
     return (string)(bcm()['severity_labels'][$sev] ?? $sev);
 }
 
-/** Statuskarte. $detail = true: zusätzlich Autor, ALARM-Mail, Gültigkeit (nur Stufe 2). */
+function severity_badge(string $sev): string
+{
+    $c = ['ok' => 'success', 'info' => 'primary', 'warn' => 'warning', 'critical' => 'danger'][$sev] ?? 'secondary';
+    return '<span class="badge text-bg-' . $c . ' text-uppercase">' . h(severity_label($sev)) . '</span>';
+}
+
+/** Statuskarte. $detail = true: zusätzlich Autor, ALARM-Mail, Notiz (nur Stufe 2). */
 function render_status_card(?array $row, bool $detail = false): void
 {
     $b = bcm();
@@ -1787,40 +1871,43 @@ function render_status_card(?array $row, bool $detail = false): void
     }
     $p = $row['payload'];
     $sev = $p['severity'];
-    echo '<section class="card banner sev-' . h($sev) . '">';
-    echo '<span class="badge">' . h(severity_label($sev)) . '</span>';
+    echo '<section class="card shadow-sm mb-3 status-card sev-' . h($sev) . '"><div class="card-body">';
+    echo '<div class="d-flex flex-wrap gap-1 mb-2">' . severity_badge($sev);
     if (!empty($p['exercise'])) {
-        echo ' <span class="badge">Übung</span>';
+        echo '<span class="badge text-bg-dark text-uppercase">Übung</span>';
     }
-    echo '<div class="big">' . h($p['label']) . '</div>';
-    echo '<p>' . nl2br(h($p['text'])) . '</p>';
+    echo '</div>';
+    echo '<h2 class="status-label mb-2">' . h($p['label']) . '</h2>';
+    echo '<p class="mb-3">' . nl2br(h($p['text'])) . '</p>';
     if (!empty($p['locations'])) {
-        echo '<table><thead><tr><th>Betroffene Standorte</th><th>Rufnummer für Rückfragen</th></tr></thead><tbody>';
+        echo '<h3 class="h6 text-body-secondary mb-2">Betroffene Standorte · Rufnummer für Rückfragen</h3><ul class="list-group mb-3">';
         foreach ($p['locations'] as $l) {
-            echo '<tr><td>' . h($l['name']) . '</td><td><a href="' . h(tel_href($l['phone'])) . '">' . h($l['phone']) . '</a></td></tr>';
+            echo '<li class="list-group-item d-flex flex-wrap justify-content-between gap-1"><span>' . h($l['name']) . '</span>'
+                . '<a class="tel" href="' . h(tel_href($l['phone'])) . '">' . h($l['phone']) . '</a></li>';
         }
-        echo '</tbody></table>';
+        echo '</ul>';
     } elseif ($sev !== 'ok') {
-        echo '<p>Rückfragen: <a href="' . h(tel_href($p['default_phone'])) . '">' . h($p['default_phone']) . '</a></p>';
+        echo '<p>Rückfragen: <a class="tel" href="' . h(tel_href($p['default_phone'])) . '">' . h($p['default_phone']) . '</a></p>';
     }
-    echo '<p class="muted">Stand: ' . h(fmt_local($row['created_at'])) . ' Uhr';
+    echo '<p class="small text-body-secondary mb-0">Stand: ' . h(fmt_local($row['created_at'])) . ' Uhr';
     if (!empty($row['valid_until'])) {
-        echo ' · Gültig bis: ' . h(fmt_local($row['valid_until'])) . ' Uhr';
+        echo '<br>Gültig bis: ' . h(fmt_local($row['valid_until'])) . ' Uhr';
     }
     echo '</p>';
     if (!empty($row['valid_until']) && utc_ts((string)$row['valid_until']) < time()) {
-        echo '<div class="msg warn">Die angegebene Gültigkeit ist überschritten. Die Aktualität wird derzeit geprüft.</div>';
+        echo '<div class="alert alert-warning mt-3 mb-0">Die angegebene Gültigkeit ist überschritten. Die Aktualität wird derzeit geprüft.</div>';
     }
     if (empty($row['mac_ok'])) {
-        echo '<div class="msg warn">Diese Meldung konnte nicht verifiziert werden. Bitte nutzen Sie bei Fragen die Rufnummer ' . h($p['default_phone']) . '.</div>';
+        echo '<div class="alert alert-warning mt-3 mb-0">Diese Meldung konnte nicht verifiziert werden. Bitte nutzen Sie bei Fragen die Rufnummer '
+            . h($p['default_phone']) . '.</div>';
     }
     if ($detail) {
-        echo '<p class="muted">Gesetzt von: ' . h((string)($row['author'] ?? '–')) . ' · ALARM-Mail: '
+        echo '<p class="small text-body-secondary mt-2 mb-0">Gesetzt von: ' . h((string)($row['author'] ?? '–')) . ' · ALARM-Mail: '
             . (!empty($row['alarm_mail']) ? 'ja' : 'nein');
         if (!empty($p['note'])) {
             echo ' · interne Notiz: ' . h($p['note']);
         }
         echo '</p>';
     }
-    echo '</section>';
+    echo '</div></section>';
 }

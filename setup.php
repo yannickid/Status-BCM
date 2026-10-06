@@ -13,6 +13,7 @@
  *   php setup.php install-db                    Tabellen anlegen
  *   php setup.php check                         Konfiguration + Meldungstexte prüfen
  *   php setup.php verify-audit                  Hash-Kette des Protokolls prüfen
+ *   php setup.php stats [Tage]                  Anmeldungen je Tag/Benutzer und Lesezähler (Standard 30 Tage)
  *   php setup.php totp-check <id> <code>        TOTP-Einrichtung testen (verbraucht den Code)
  */
 declare(strict_types=1);
@@ -247,6 +248,30 @@ switch ($cmd) {
         $v = audit_verify();
         out(($v['ok'] ? 'OK' : 'FEHLER: ' . $v['error']) . " – {$v['count']} Einträge, Kopf-Hash {$v['head']}");
         exit($v['ok'] ? 0 : 2);
+
+    case 'stats':
+        $days = max(1, min(366, (int)($args[0] ?? 30)));
+        $st = login_stats($days);
+        out('Anmeldungen         ' . implode('  ', array_map(fn($k) => str_pad($k, 8, ' ', STR_PAD_LEFT), array_keys($st['periods']))));
+        out('Stufe 1 (gemeinsam) ' . implode('  ', array_map(fn($p) => str_pad((string)$p['s1'], 8, ' ', STR_PAD_LEFT), $st['periods'])));
+        foreach (users() as $id => $u) {
+            out(str_pad("Stufe 2: $id", 20) . implode('  ', array_map(fn($p) => str_pad((string)($p['s2'][$id] ?? 0), 8, ' ', STR_PAD_LEFT), $st['periods']))
+                . '   zuletzt: ' . fmt_local($st['last'][$id] ?? null));
+        }
+        out('Fehlgeschlagen S2   ' . implode('  ', array_map(fn($p) => str_pad((string)$p['fail'], 8, ' ', STR_PAD_LEFT), $st['periods'])));
+        out('');
+        out('Tag          Stufe 1  Stufe 2  Fehlgeschl.');
+        foreach ($st['days'] as $d => $c) {
+            out(sprintf('%s %8d %8d %12d', $d, $c['s1'], $c['s2'], $c['fail']));
+        }
+        out('');
+        out('Lesezähler (Sitzungen je Status, anonym):');
+        $hist = status_history(15);
+        $views = view_totals(array_column($hist, 'id'));
+        foreach ($hist as $r) {
+            out(sprintf('%s  %-40s %6d', fmt_local($r['created_at']), mb_substr((string)($r['payload']['label'] ?? $r['status_key']), 0, 40), $views[(int)$r['id']] ?? 0));
+        }
+        break;
 
     case 'totp-check':
         $u = users()[strtolower((string)($args[0] ?? ''))] ?? null;

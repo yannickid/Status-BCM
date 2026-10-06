@@ -206,6 +206,25 @@ ok(str_contains($visible, 'To: undisclosed-recipients:;') && !str_contains($visi
 $lastMail = db()->query('SELECT result_enc FROM ' . t('mail_log') . " WHERE kind = 'alarm'")->fetchColumn();
 ok(!str_contains((string)$lastMail, 'geheim1') && str_contains(dec((string)$lastMail, 'mail.result'), 'g******@z***.example'), 'Protokoll speichert nur maskierte Adressen, verschlüsselt');
 
+/* --- Nutzung: Lesezähler und Login-Statistik --- */
+$sid = (int)status_current()['id'];
+$_SESSION = [];
+view_count($sid);
+view_count($sid);
+$_SESSION = [];
+view_count($sid);
+ok(view_totals([$sid]) === [$sid => 2], 'Lesezähler: einmal je Sitzung und Status');
+ok(!str_contains(json_encode(db()->query('SELECT * FROM ' . t('view_count'))->fetchAll()), '203.0.113'), 'Lesezähler speichert keine IP');
+audit('login1.ok', 'session', [], 'stage1', 1);
+audit('login1.ok', 'session', [], 'stage1', 1);
+audit('login2.ok', 'session', [], 'anna', 2);
+audit('login2.fail', 'session', ['user' => 'x'], 'anonymous', 1);
+$st = login_stats(30);
+ok($st['periods']['heute']['s1'] === 2 && $st['periods']['heute']['s2'] === ['anna' => 1] && $st['periods']['30 Tage']['fail'] === 1,
+    'Login-Statistik zählt Stufe 1, Stufe 2 je Benutzer und Fehlversuche');
+ok($st['last']['anna'] !== null && count($st['days']) === 1, 'Login-Statistik: letzte Anmeldung und Tageswerte');
+ok(audit_verify()['ok'], 'Audit-Kette nach Statistik-Einträgen intakt');
+
 /* --- Throttle --- */
 for ($i = 0; $i < 5; $i++) {
     throttle_record('s2', 'anna', false);

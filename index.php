@@ -48,16 +48,19 @@ if (stage1_ok()) {
     redirect('status.php');
 }
 
-page_start((string)cfg('app.title', 'Status'));
-echo '<h1>' . h((string)cfg('app.title', 'Status')) . '</h1>';
-echo '<div class="card"><form method="post" action="index.php" autocomplete="off">';
+$title = (string)cfg('app.title', 'Status');
+page_start($title);
+echo '<div class="row justify-content-center"><div class="col-12 col-sm-10 col-md-8">';
+echo '<h1 class="h3 my-3">' . h($title) . '</h1>';
+echo '<div class="card shadow-sm"><div class="card-body">';
+echo '<form method="post" action="index.php" autocomplete="off">';
 echo csrf_field() . '<input type="hidden" name="action" value="login">';
 if ($err) {
-    echo '<div class="msg err" role="alert">' . h($err) . '</div>';
+    echo '<div class="alert alert-danger" role="alert">' . h($err) . '</div>';
 }
-echo '<label for="pw">Zugangspasswort</label>';
-echo '<input id="pw" type="password" name="password" autocomplete="current-password" required autofocus>';
+echo '<label class="form-label" for="pw">Zugangspasswort</label>';
+echo '<input class="form-control form-control-lg mb-3" id="pw" type="password" name="password" autocomplete="current-password" required autofocus>';
 echo '<div class="hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>';
-echo '<button class="primary" type="submit">Anmelden</button>';
-echo '</form></div>';
+echo '<div class="d-grid"><button class="btn btn-primary btn-lg" type="submit">Anmelden</button></div>';
+echo '</form></div></div></div></div>';
 page_end();

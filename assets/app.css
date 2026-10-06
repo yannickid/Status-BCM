@@ -1,0 +1,33 @@
+/* Status-BCM – Ergänzungen zu Bootstrap 5.3 (nur CSS, kein JavaScript). Mobile First: Basis = Smartphone. */
+
+.app-wrap{max-width:46rem}
+.app-title{font-size:1.25rem;margin:0}
+
+/* Statuskarte: farbiger Balken links je Schweregrad */
+.status-card{border-left:.5rem solid var(--sev,var(--bs-border-color))}
+.sev-ok{--sev:var(--bs-success)}
+.sev-info{--sev:var(--bs-primary)}
+.sev-warn{--sev:var(--bs-warning)}
+.sev-critical{--sev:var(--bs-danger)}
+.status-label{font-size:1.35rem;font-weight:700;line-height:1.25}
+
+/* Große Touch-Ziele auf dem Smartphone */
+.btn,.form-control,.form-select{min-height:2.75rem}
+.form-check{padding-top:.25rem;padding-bottom:.25rem}
+.form-check-input{width:1.25em;height:1.25em;margin-top:.15em}
+.tel{white-space:nowrap;font-weight:600}
+
+/* Honeypot (für Menschen unsichtbar) */
+.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+
+/* Tabellen in Stufe 2 dürfen umbrechen statt zu scrollen */
+.table-wrap td,.table-wrap th{word-break:break-word}
+
+@media (min-width:576px){
+  .status-label{font-size:1.6rem}
+  .app-title{font-size:1.4rem}
+}
+
+@media print{
+  .no-print,header nav,header form{display:none!important}
+}
