@@ -9,7 +9,10 @@
 3. Die Seite zeigt **alle gültigen Meldungen**, die wichtigste zuerst (z. B. "Netzwerk eingeschränkt" an Standort A
    und gleichzeitig "Sicherheitsmaßnahme" an Standort B). Je Meldung:
    * farbiges Etikett (Information, Hinweis, Wichtiger Hinweis) und der Meldungstext,
-   * gegebenenfalls betroffene Standorte mit **Rückrufnummer**. Ein Tipp auf die Nummer startet den Anruf.
+   * **"Für alle:"** über dem Titel, wenn die Meldung alle Standorte betrifft (ohne Standortliste, Zielgruppe "Alle" oder
+     alle Standorte angekreuzt),
+   * gegebenenfalls betroffene Standorte mit **Rückrufnummer**. Ein Tipp auf die Nummer startet den Anruf. Hat ein
+     Standort keine eigene Durchwahl, steht dort die **Standard-Rufnummer** mit dem Zusatz "(zentrale Rufnummer)".
    * gegebenenfalls **Kontakt**: Notfallnummer, E-Mail oder Videokonferenz (Plattform, Link, Konferenz-ID),
    * "Stand" und "Gültig bis".
    Gilt keine Meldung, steht dort "Regelbetrieb".
@@ -23,7 +26,7 @@
 
 Auf der Startseite mit der **persönlichen Kennung** und dem eigenen Passwort anmelden. Danach fragt die Seite den
 **6-stelligen Code aus der Authenticator-App** ab. Erst dann sehen Sie die Statusseite und zusätzlich das Menü
-**Einstellungen**. Wer bereits mit dem gemeinsamen Zugang angemeldet ist, kann sich auch unter **Einstellungen**
+**Einstellungen**. Abmelden geht über **Abmelden** oben rechts; damit endet die gesamte Sitzung. Wer bereits mit dem gemeinsamen Zugang angemeldet ist, kann sich auch unter **Einstellungen**
 persönlich anmelden (ebenfalls mit Code). Der gemeinsame Lesezugang braucht keinen Code.
 
 Warum schon beim Login: Mit der persönlichen Kennung sieht man Protokoll, IP-Adressen und interne Notizen. Ein
@@ -55,7 +58,9 @@ Mehrere Meldungen können gleichzeitig gelten. Eine neue Meldung ersetzt keine b
 4. **Gültigkeit** festlegen: eine **Dauer** (1 Stunde … 2 Tage) **oder** "Gültig bis" (Datum und Uhrzeit).
 5. Optional **ALARM-Mail senden** und die **Alarmkreise** wählen (z. B. IT, BOA/Krisenstab, Leitung). "Standortverwaltung
    der betroffenen Standorte" ist vorausgewählt; ohne Standortliste sind das alle Standortverwaltungen. Die Mail geht
-   per BCC an diese Adressen, an Sie und an die Kopie-Adresse. Sind für einen Kreis **Signal**-Empfänger oder ein
+   **an** die Absenderadresse (oder die unter System hinterlegte Adresse im An-Feld) und per **BCC** an diese Adressen,
+   an Sie, an die Kopie-Adresse und an die **zusätzlichen Empfänger der Stufe** (siehe System). Die Empfänger sehen sich
+   gegenseitig nicht. Sind für einen Kreis **Signal**-Empfänger oder ein
    **GroupAlarm**-Szenario hinterlegt, geht die Meldung zusätzlich dorthin (die Vorschau nennt das).
 6. Optional eine **interne Notiz** (Anlass). Sie steht nur im Protokoll, nie auf der Statusseite.
 7. **Vorschau**: Prüfen Sie die Meldung genau so, wie alle sie sehen werden. Bei ALARM-Mail stehen dort Betreff-Präfix,
@@ -147,6 +152,9 @@ Menü **System** (nur Admins). Änderungen verlangen Ihren TOTP-Code und stehen 
 | Standorte | Name, Durchwahl und **E-Mail der Standortverwaltung** je Außenstelle. Name und Durchwahl erscheinen auf der Statusseite, die Adressen nie (nur maskiert unter System) |
 | Kontakte für Meldungen | Notfallnummer, E-Mail, Videokonferenz (Plattform, https-Link, Konferenz-ID/PIN). Für alle Beschäftigten sichtbar, sobald einer Meldung zugeordnet |
 | Betreff-Präfixe | Präfix der ALARM-Mail für "Neuer Alarm", "Aktualisierung" und "Ende", z. B. `[ALARM]` |
+| Adresse im An-Feld der ALARM-Mail | Leer = Absenderadresse (`mail.from_email`). Alle anderen Empfänger stehen nur im BCC |
+| Zusätzliche Empfänger je Stufe | Je Stufe (Information, Hinweis, Wichtiger Hinweis) Adressen, die jede ALARM-Mail dieser Stufe zusätzlich zu den gewählten Kreisen bekommen, z. B. Geschäftsführung nur bei "Wichtiger Hinweis". Per BCC, verschlüsselt, nur maskiert sichtbar |
+| Standard-Rufnummer | Ersetzt `default_phone` aus `config.json`. Erscheint bei Meldungen ohne Standortliste und bei Standorten ohne eigene Durchwahl. Leer = Wert aus `config.json` |
 | Kopie-Adresse | `cc_default_mail1` ändern (Erinnerungen, Kopie der ALARM-Mails, Audit-Anker) |
 | Gemeinsamer Zugang für alle | Benutzername (z. B. "Unternehmen") und Zugangspasswort (Stufe 1) ändern; gilt sofort für neue Anmeldungen. Danach intern bekannt geben. Der Name darf keiner persönlichen Kennung gleichen |
 | Protokoll-Export | Änderungsprotokoll als **CSV** (Excel, Revision) oder **PDF** (Ablage, ISB), wahlweise für einen Zeitraum und mit oder ohne IP-Adressen. Kopf mit Integritätsprüfung und Kopf-Hash; jeder Export steht selbst im Protokoll |

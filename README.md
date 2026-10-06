@@ -28,7 +28,8 @@ erreichbar, wenn Netzwerk, Telefon oder Mail im Haus gestört sind.
   ("Nicht mehr gültig" bzw. "Zurückgenommen / gelöst"). Erinnerungsmail bei Ablauf, bis verlängert oder beendet wird.
 * **Standorte mit Rückrufnummer** und **Kontakte** je Meldung: Notfallnummer, E-Mail oder Videokonferenz.
 * **ALARM-Mail** per BCC an gewählte **Alarmkreise** (z. B. IT, BOA/Krisenstab, Leitung) und die Standortverwaltung
-  der betroffenen Außenstellen, mit einstellbarem Betreff-Präfix für neu, Aktualisierung und Ende. Die Adressen sind
+  der betroffenen Außenstellen, je Stufe mit zusätzlichen Empfängern (z. B. Leitung nur bei "Wichtiger Hinweis").
+  Im An-Feld steht nur die Absender- oder eine hinterlegte Adresse, alle Empfänger im BCC. Mit einstellbarem Betreff-Präfix für neu, Aktualisierung und Ende. Die Adressen sind
   verschlüsselt und nirgends im Klartext sichtbar.
 * **Weitere Alarmkanäle:** zusätzlich **Signal** (über eine eigene signal-cli-rest-api) und **GroupAlarm** je
   Alarmkreis, damit die Alarmierung auch ohne die eigene Mail-Infrastruktur ankommt.
@@ -81,7 +82,7 @@ Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-install
 | `status.php` | aktueller Status |
 | `change.php` | Login Stufe 2, Meldungen setzen, verlängern, ändern, beenden (Formular → Vorschau → verbindlich), Verlauf, Protokoll, Nutzung, eigenes Passwort |
 | `admin.php` | Benutzerverwaltung (nur Admins) |
-| `system.php` | System (nur Admins): Prüfung, Cron-Adresse, Alarmkreise mit Signal/GroupAlarm, Standorte mit E-Mail der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse, Zugangspasswort, Protokoll-Export, Testmail |
+| `system.php` | System (nur Admins): Prüfung, Cron-Adresse, Alarmkreise mit Signal/GroupAlarm, Standorte mit E-Mail der Standortverwaltung, Kontakte, Betreff-Präfixe, An-Feld, Empfänger je Stufe, Standard-Rufnummer, Kopie-Adresse, Zugangspasswort, Protokoll-Export, Testmail |
 | `aushang.php` | druckbarer Aushang mit QR-Code (persönliche Anmeldung) |
 | `export.php` | Protokoll-Export CSV/PDF (nur Admins) |
 | `health.php` | Gesundheitsprüfung für externe Uptime-Dienste (200 `ok` / 503) |

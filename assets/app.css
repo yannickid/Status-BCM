@@ -21,6 +21,7 @@ summary{cursor:pointer}
 .sev-critical{--sev:var(--bs-danger)}
 /* Beendet/abgelaufen: grau abgesetzt, Text behält vollen Kontrast (WCAG 1.4.3) */
 .status-gone{--sev:var(--bs-secondary-border-subtle);background:var(--bs-secondary-bg-subtle);border-style:dashed}
+.status-scope{font-weight:700;text-transform:uppercase;letter-spacing:.04em}
 .status-label{font-size:1.35rem;font-weight:700;line-height:1.25}
 
 /* Große Touch-Ziele auf dem Smartphone */

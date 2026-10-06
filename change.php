@@ -39,9 +39,6 @@ if ($method === 'POST') {
     } elseif ($act === 'login_cancel') {
         unset($_SESSION['login_totp']);
         redirect('change.php');
-    } elseif ($act === 'logout2') {
-        unset($_SESSION['s2'], $_SESSION['pending']);
-        redirect('change.php');
     } elseif (!$user) {
         $errors[] = 'Bitte erneut anmelden.';
     } elseif ($act === 'setup' || $act === 'pw_change') {
@@ -199,10 +196,7 @@ if (!$user) {
     exit;
 }
 
-echo '<div class="d-flex flex-wrap align-items-center gap-2 mb-3 small text-body-secondary">'
-    . '<span class="me-auto">Angemeldet als ' . h($user['name']) . ' (' . h($user['id']) . ')</span>'
-    . '<form method="post" action="change.php" class="m-0">' . csrf_field()
-    . '<input type="hidden" name="action" value="logout2"><button class="btn btn-outline-secondary btn-sm" type="submit">Stufe 2 beenden</button></form></div>';
+echo '<p class="mb-3 small text-body-secondary">Angemeldet als ' . h($user['name']) . ' (' . h($user['id']) . '). Abmelden oben rechts.</p>';
 
 /* Ersteinrichtung: Einmalpasswort ersetzen, abgelaufenes Passwort erneuern, Authenticator-App koppeln */
 if (user_needs_setup($user)) {

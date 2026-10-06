@@ -10,7 +10,7 @@ if (!defined('SBCM')) {
     exit;
 }
 
-const SBCM_VERSION = '1.4.1';
+const SBCM_VERSION = '1.5.0';
 define('SBCM_ZERO', str_repeat('0', 64));
 
 /* ====================================================================== */
@@ -99,6 +99,10 @@ function bcm(bool $reload = false, bool $raw = false): array
     }
     if ($b === null) {
         $b = $j;
+        $dp = setting_get('default_phone');
+        if (is_string($dp) && trim($dp) !== '') {
+            $b['default_phone'] = trim($dp);
+        }
         $web = setting_get('locations');
         if (is_array($web)) {
             $b['locations'] = [];
@@ -697,7 +701,7 @@ function setting_set(string $k, $v): void
 {
     kv_set('set:' . $k, enc(json_enc($v), 'setting:' . $k, 'settings'));
     setting_get($k, true);
-    if ($k === 'locations') {
+    if ($k === 'locations' || $k === 'default_phone') {
         bcm(true);
     }
 }
@@ -1418,6 +1422,93 @@ function mail_prefixes_set(array $in, string $actor, array $how = []): ?string
     tx(function () use ($new, $actor, $how) {
         setting_set('mail_prefix', $new);
         audit('setting.mail_prefix', 'mail', ['prefixes' => $new, 'how' => $how], $actor, setting_level($actor));
+    });
+    return null;
+}
+
+/* ---- Versand: Adresse im An-Feld, zusätzliche Empfänger je Stufe, Standard-Rufnummer ---- */
+
+const SBCM_LEVELS = ['info' => 'Information', 'warn' => 'Hinweis', 'critical' => 'Wichtiger Hinweis'];
+
+/** Adresse im An-Feld der ALARM-Mails: unter System hinterlegt, sonst die Absenderadresse. Alle Kreise bekommen BCC. */
+function alarm_to_address(): string
+{
+    $web = setting_get('alarm_to');
+    if (is_string($web) && filter_var($web, FILTER_VALIDATE_EMAIL)) {
+        return $web;
+    }
+    $from = strtolower(trim((string)cfg('mail.from_email', '')));
+    return filter_var($from, FILTER_VALIDATE_EMAIL) ? $from : '';
+}
+
+/** Leere Eingabe = zurück auf die Absenderadresse. */
+function alarm_to_change(string $mail, string $actor, array $how = []): ?string
+{
+    $mail = strtolower(trim($mail));
+    if ($mail !== '' && !filter_var($mail, FILTER_VALIDATE_EMAIL)) {
+        return 'Bitte eine gültige E-Mail-Adresse angeben (leer = Absenderadresse).';
+    }
+    tx(function () use ($mail, $actor, $how) {
+        $before = alarm_to_address();
+        setting_set('alarm_to', $mail);
+        $after = alarm_to_address();
+        audit('setting.alarm_to', 'mail', ['masked' => [$after !== '' ? mask_email($after) : '–'], 'before' => $before !== '' ? mask_email($before) : '–',
+            'how' => $how], $actor, setting_level($actor));
+    });
+    return null;
+}
+
+/** Zusätzliche Empfänger (BCC) je Stufe: ['info' => [...], 'warn' => [...], 'critical' => [...]] */
+function level_cc(): array
+{
+    $v = setting_get('level_cc');
+    $out = [];
+    foreach (SBCM_LEVELS as $k => $_) {
+        $out[$k] = is_array($v) && is_array($v[$k] ?? null) ? array_values(array_filter($v[$k], fn($e) => is_string($e) && filter_var($e, FILTER_VALIDATE_EMAIL))) : [];
+    }
+    return $out;
+}
+
+function level_cc_update(string $sev, string $add, array $remove, string $actor, array $how = []): ?string
+{
+    if (!isset(SBCM_LEVELS[$sev])) {
+        return 'Unbekannte Stufe.';
+    }
+    $all = level_cc();
+    [$ok, $bad] = parse_email_list($add);
+    if ($bad) {
+        return 'Ungültige Adresse(n): ' . implode(', ', array_map('mask_email', $bad));
+    }
+    $gone = [];
+    foreach ($remove as $r) {
+        if (isset($all[$sev][(int)$r])) {
+            $gone[] = $all[$sev][(int)$r];
+        }
+    }
+    $new = array_values(array_diff($ok, $all[$sev]));
+    if (!$new && !$gone) {
+        return 'Keine Änderung (Adressen bereits vorhanden oder nichts ausgewählt).';
+    }
+    $all[$sev] = array_values(array_merge(array_diff($all[$sev], $gone), $new));
+    tx(function () use ($all, $sev, $new, $gone, $actor, $how) {
+        setting_set('level_cc', $all);
+        audit('setting.level_cc', 'mail', ['level' => SBCM_LEVELS[$sev], 'masked' => array_merge(
+            array_map(fn($e) => '+' . mask_email($e), $new), array_map(fn($e) => '-' . mask_email($e), $gone)), 'how' => $how], $actor, setting_level($actor));
+    });
+    return null;
+}
+
+/** Standard-Rufnummer: unter System hinterlegt, sonst default_phone aus config.json. */
+function default_phone_change(string $phone, string $actor, array $how = []): ?string
+{
+    $phone = trim($phone);
+    if ($phone !== '' && !preg_match('/^[0-9+ ()\/-]{3,40}$/', $phone)) {
+        return 'Rufnummer: nur Ziffern, +, Leerzeichen, ( ) / -';
+    }
+    tx(function () use ($phone, $actor, $how) {
+        $before = bcm()['default_phone'];
+        setting_set('default_phone', $phone);
+        audit('setting.default_phone', 'bcm', ['before' => $before, 'phone' => bcm()['default_phone'], 'how' => $how], $actor, setting_level($actor));
     });
     return null;
 }
@@ -2292,7 +2383,9 @@ function audit_describe(string $action, array $d): string
         'setting.circle_create' => 'Alarmkreis angelegt', 'setting.circle_update' => 'Alarmkreis geändert', 'setting.circle_delete' => 'Alarmkreis gelöscht',
         'setting.location_create' => 'Standort angelegt', 'setting.location_update' => 'Standort geändert', 'setting.location_delete' => 'Standort gelöscht',
         'setting.contact_create' => 'Kontakt angelegt', 'setting.contact_update' => 'Kontakt geändert', 'setting.contact_delete' => 'Kontakt gelöscht',
-        'setting.mail_prefix' => 'Betreff-Präfixe geändert', 'setting.circle_channels' => 'Alarmkreis: Signal/GroupAlarm geändert',
+        'setting.mail_prefix' => 'Betreff-Präfixe geändert',
+        'setting.alarm_to' => 'Adresse im An-Feld der ALARM-Mail geändert', 'setting.level_cc' => 'Zusätzliche Empfänger je Stufe geändert',
+        'setting.default_phone' => 'Standard-Rufnummer geändert', 'setting.circle_channels' => 'Alarmkreis: Signal/GroupAlarm geändert',
         'channel.alarm' => 'Alarm über Signal/GroupAlarm', 'audit.export' => 'Protokoll exportiert', 'monitor.cron_stale' => 'Warnung: Cron läuft nicht',
     ];
     $s = $labels[$action] ?? $action;
@@ -2319,6 +2412,12 @@ function audit_describe(string $action, array $d): string
     }
     if (!empty($d['location_recipients'])) {
         $parts[] = 'Standortadressen: ' . (int)$d['location_recipients'];
+    }
+    if (!empty($d['level']) && is_string($d['level'])) {
+        $parts[] = 'Stufe: ' . $d['level'];
+    }
+    if (isset($d['phone']) && is_string($d['phone'])) {
+        $parts[] = 'Rufnummer: ' . ($d['before'] ?? '–') . ' → ' . $d['phone'];
     }
     foreach (['circle' => 'Kreis', 'location' => 'Standort', 'contact' => 'Kontakt'] as $f => $lbl) {
         if (!empty($d[$f]) && is_string($d[$f])) {
@@ -2669,6 +2768,11 @@ function alarm_targets(array $spec, array $payload): array
                 }
             }
         }
+    }
+    // zusätzliche Empfänger der Stufe (System -> Zusätzliche Empfänger je Stufe)
+    $sev = (string)($payload['severity'] ?? (bcm()['by_key'][(string)($spec['key'] ?? '')]['severity'] ?? ''));
+    foreach (level_cc()[$sev] ?? [] as $e) {
+        $mails[$e] = $e;
     }
     return [array_values(array_unique(array_merge(array_values($mails), array_values($locMails)))), $names, count($locMails)];
 }
@@ -3197,11 +3301,13 @@ function send_alarm_mail(string $kind, int $statusId, array $payload, ?string $v
     if ($cc1 !== '') {
         $bcc[] = $cc1;
     }
-    $bcc = array_values(array_unique(array_map('strtolower', $bcc)));
+    // An: Absender bzw. unter System hinterlegte Adresse; alle Empfänger der Kreise nur als BCC (sehen sich gegenseitig nicht)
+    $to = alarm_to_address();
+    $bcc = array_values(array_diff(array_unique(array_map('strtolower', $bcc)), [$to]));
     $sum = ['total' => 0, 'ok' => 0, 'failed' => 0];
     $logKind = ['new' => 'alarm', 'update' => 'alarm_upd', 'end' => 'alarm_end'][$kind] ?? 'alarm';
-    foreach (array_chunk($bcc, max(1, (int)cfg('mail.max_bcc_per_message', 50))) as $chunk) {
-        $res = mail_deliver(['bcc' => $chunk, 'subject' => $subject, 'body' => $body, 'priority' => true]);
+    foreach (array_chunk($bcc, max(1, (int)cfg('mail.max_bcc_per_message', 50))) ?: [[]] as $chunk) {
+        $res = mail_deliver(['to' => $to !== '' ? [$to] : [], 'bcc' => $chunk, 'subject' => $subject, 'body' => $body, 'priority' => true]);
         $r = mail_record($logKind, $statusId, $subject, $body, $res);
         foreach ($sum as $k => $_) {
             $sum[$k] += $r[$k];
@@ -3617,6 +3723,16 @@ function render_contacts(array $contacts): void
  * Meldungskarte. $detail = true: zusätzlich Autor, ALARM-Mail, Notiz (nur Stufe 2). Ist $row['gone'] gesetzt
  * (expired | ended), wird die Karte ausgegraut mit "nicht mehr gültig" bzw. "zurückgenommen/gelöst" angezeigt.
  */
+/** Gilt die Meldung für alle? Ja ohne Standortliste (Zielgruppe ALLE) oder wenn alle Standorte gewählt sind. */
+function status_for_all(array $p): bool
+{
+    if (($p['audience'] ?? '') === 'ALLE' || empty($p['locations'])) {
+        return true;
+    }
+    $all = array_column(bcm()['locations'] ?? [], 'id');
+    return $all !== [] && !array_diff($all, array_column($p['locations'], 'id'));
+}
+
 function render_status_card(?array $row, bool $detail = false): void
 {
     $b = bcm();
@@ -3641,13 +3757,17 @@ function render_status_card(?array $row, bool $detail = false): void
         echo '<span class="badge text-bg-dark text-uppercase">Übung</span>';
     }
     echo '</div>';
+    if ($sev !== 'ok' && status_for_all($p)) {
+        echo '<p class="status-scope mb-1">Für alle:</p>';
+    }
     echo '<h2 class="status-label mb-2">' . h($p['label']) . '</h2>';
     echo '<p class="mb-3">' . nl2br(h($p['text'])) . '</p>';
     if (!empty($p['locations'])) {
         echo '<h3 class="h6 text-body-secondary mb-2">Betroffene Standorte · Rufnummer für Rückfragen</h3><ul class="list-group mb-3">';
         foreach ($p['locations'] as $l) {
             echo '<li class="list-group-item d-flex flex-wrap justify-content-between gap-1"><span>' . h($l['name']) . '</span>'
-                . '<a class="tel" href="' . h(tel_href($l['phone'])) . '">' . h($l['phone']) . '</a></li>';
+                . '<span><a class="tel" href="' . h(tel_href($l['phone'])) . '">' . h($l['phone']) . '</a>'
+                . (!empty($l['default_phone']) ? ' <span class="small text-body-secondary">(zentrale Rufnummer)</span>' : '') . '</span></li>';
         }
         echo '</ul>';
     } elseif ($sev !== 'ok') {

@@ -75,7 +75,7 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 |---|---|---|
 | Beschäftigte | Stufe 1: gemeinsamer Benutzername + Zugangspasswort | Aktuellen Status lesen |
 | Redaktion (`editor`) | persönliche Kennung + Passwort im selben Formular, danach TOTP-Code (gilt als Stufe 1 + 2) | Status setzen, verlängern, beenden; ALARM-Mail auslösen (mit TOTP); Verlauf, Protokoll und Nutzung einsehen; eigenes Passwort ändern |
-| Admin (`admin`) | wie Redaktion | zusätzlich Benutzerverwaltung (`admin.php`): anlegen, Passwort/TOTP zurücksetzen, Rolle ändern, (de)aktivieren; System (`system.php`): Benutzername und Zugangspasswort Stufe 1, Alarmkreise mit Signal-Empfängern und GroupAlarm-Szenario, Standorte mit Adressen der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse; Änderungen jeweils mit TOTP; Prüfung, Cron-Adresse, Testmail, Protokoll-Export |
+| Admin (`admin`) | wie Redaktion | zusätzlich Benutzerverwaltung (`admin.php`): anlegen, Passwort/TOTP zurücksetzen, Rolle ändern, (de)aktivieren; System (`system.php`): Benutzername und Zugangspasswort Stufe 1, Alarmkreise mit Signal-Empfängern und GroupAlarm-Szenario, Standorte mit Adressen der Standortverwaltung, Kontakte, Betreff-Präfixe, Kopie-Adresse, An-Feld, Empfänger je Stufe, Standard-Rufnummer; Änderungen jeweils mit TOTP; Prüfung, Cron-Adresse, Testmail, Protokoll-Export |
 | Betrieb (FTP, optional Shell) | Zugang zum Webspace | Ersteinrichtung (`install.php` mit Einrichtungscode aus `storage/`), `config.json` und `config.local.inc.php` pflegen, Sicherung; optional `setup.php` |
 
 * **Need-to-know:** Empfängeradressen sieht niemand in der Oberfläche, nur die Anzahl bzw. maskiert (`m****@e***.de`).
@@ -151,7 +151,7 @@ nicht mehr lesbar. Ein Schlüsselwechsel ist nur bei einer Neuinstallation vorge
 | Meldung gesetzt / verlängert / geändert / beendet / automatisch beendet | `status.set`, `status.extend`, `status.update`, `status.end`, `status.auto_end` (Meldungsnummer, vorher → nachher, Standorte, Kontakte, Gültigkeit, ALARM ja/nein, TOTP ja/nein, interne Notiz) |
 | Mails | `mail.alarm` (Art neu/Aktualisierung/Ende, gewählte Kreise, Anzahl Standortadressen), `mail.reminder`, `mail.autorevert`, `mail.pw_reminder`, `mail.anchor` (nur Anzahl erfolgreich/fehlgeschlagen) |
 | Benutzerverwaltung | `user.create`, `user.reset_pw`, `user.set_pw`, `user.reset_totp`, `user.set_totp`, `user.role`, `user.disable`, `user.enable` |
-| Einrichtung und System | `system.install`, `setting.stage1`, `setting.cc1`, `setting.circle_create/update/delete`, `setting.circle_channels`, `setting.location_create/update/delete`, `setting.contact_create/update/delete`, `setting.mail_prefix` (Adressen und Nummern nur maskiert), `system.cron_manual`, `mail.test` |
+| Einrichtung und System | `system.install`, `setting.stage1`, `setting.cc1`, `setting.alarm_to`, `setting.level_cc` (mit Stufe), `setting.default_phone`, `setting.circle_create/update/delete`, `setting.circle_channels`, `setting.location_create/update/delete`, `setting.contact_create/update/delete`, `setting.mail_prefix` (Adressen und Nummern nur maskiert), `system.cron_manual`, `mail.test` |
 | Weitere Kanäle | `channel.alarm` (Art, je Kanal Anzahl erfolgreich/fehlgeschlagen, keine Nummern) |
 | Überwachung und Export | `monitor.cron_stale` (Warnmail bei Cron-Ausfall), `audit.export` (Format, Zeitraum, mit/ohne IP) |
 
@@ -193,8 +193,11 @@ festlegen (Abschnitt 7). Eine Löschung ist nur durch die Datenbankadministratio
 * Alarmkreise und die E-Mail-Adressen der Standortverwaltungen werden unter **System** gepflegt (Änderung nur mit
   TOTP, protokolliert) und liegen verschlüsselt in der Datenbank. Nichts davon steht im Git oder in `config.json`.
 * Jede ALARM-Mail geht nur an die gewählten Kreise und die Standortverwaltungen der betroffenen Standorte
-  (Need-to-know), dazu an die auslösende Person und `cc_default_mail1`.
-* Der Versand erfolgt **ausschließlich per BCC** (`To: undisclosed-recipients:;`), in Paketen zu max. 50 Adressen.
+  (Need-to-know), dazu an die auslösende Person, `cc_default_mail1` und die unter **System** je Stufe hinterlegten
+  zusätzlichen Empfänger.
+* Im An-Feld steht nur die Absenderadresse (`mail.from_email`) oder eine unter **System** hinterlegte Adresse
+  (z. B. ein Funktionspostfach). Alle Empfänger stehen **ausschließlich im BCC**, in Paketen zu max. 50 Adressen; die
+  An-Adresse bekommt je Paket eine Kopie. Kein `undisclosed-recipients`, das manche Spamfilter abwerten.
 * In Oberfläche und Protokoll erscheinen nur die Anzahl bzw. maskierte Adressen.
 
 ### 5.6 Pressetaugliche Meldungen (Integrität der Aussage)
@@ -346,7 +349,7 @@ auf).
 | `audit` | Änderungsprotokoll | Nr., Zeit, Akteur-Kennung, Stufe, Aktion, Objekt | **verschlüsselt:** Details (vorher/nachher, IP, Browser, Notiz, maskierte Adressen); **HMAC-Hash-Kette** | nie (Trigger verhindert `UPDATE`/`DELETE`); Frist im Löschkonzept |
 | `mail_log` | versendete Mails | Zeit, Art, Anzahl Empfänger/zugestellt | **verschlüsselt:** Betreff, Text, Zustellergebnis mit **maskierten** Adressen | derzeit keine automatische Löschung |
 | `account` | Redaktion und Admins | Kennung, Anzeigename, Rolle, aktiv, Passwortdaten (Datum) | **bcrypt:** Passwort; **verschlüsselt:** E-Mail, TOTP-Secret; **MAC** über die Zeile | nie gelöscht, nur deaktiviert |
-| `kv` | im Browser gepflegte Einstellungen | Schlüsselnamen; Zeitpunkt letzter Cron-Lauf und letzte Warnmail | **verschlüsselt:** Alarmkreise (Mail-Adressen, Signal-Nummern, GroupAlarm-Szenario), Standorte mit Adressen der Standortverwaltung, Kontakte, Präfixe, Kopie-Adresse, Benutzername und Passwort-Hash (bcrypt) des gemeinsamen Zugangs | beim Entfernen unter **System** |
+| `kv` | im Browser gepflegte Einstellungen | Schlüsselnamen; Zeitpunkt letzter Cron-Lauf und letzte Warnmail | **verschlüsselt:** Alarmkreise (Mail-Adressen, Signal-Nummern, GroupAlarm-Szenario), Standorte mit Adressen der Standortverwaltung, Kontakte, Präfixe, Kopie-Adresse, Adresse im An-Feld, zusätzliche Empfänger je Stufe, Standard-Rufnummer, Benutzername und Passwort-Hash (bcrypt) des gemeinsamen Zugangs | beim Entfernen unter **System** |
 | `login_attempt` | Fehlversuche (Brute-Force-Schutz) | Zeit, Bereich, ok ja/nein | IP und Benutzer nur als **HMAC-Pseudonym** | automatisch nach 2 Tagen |
 | `totp_used` | verbrauchte TOTP-Zeitschritte (Replay-Schutz) | Kennung, Zeitschritt | – (kein Geheimnis) | automatisch nach etwa 1 Stunde |
 | `view_count` | Lesezähler | Meldungs-ID, Tag, Anzahl | – (keine IP, keine Person) | derzeit keine automatische Löschung |
