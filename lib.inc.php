@@ -10,7 +10,7 @@ if (!defined('SBCM')) {
     exit;
 }
 
-const SBCM_VERSION = '1.6.0';
+const SBCM_VERSION = '1.7.0';
 define('SBCM_ZERO', str_repeat('0', 64));
 
 /* ====================================================================== */
@@ -1398,15 +1398,22 @@ function contact_delete(string $id, string $actor, array $how = []): ?string
 
 /* ---- Fachverfahren / Unternehmensanwendungen ---------------------------- */
 
-/** Rollen, denen je Fachverfahren Alarmkreise zugeordnet werden. Partner sind standardmäßig nicht vorausgewählt. */
-const SBCM_APP_ROLES = ['verantwortlich' => 'Verantwortlich', 'technik' => 'Technik', 'betrieb' => 'Betrieb', 'nutzende' => 'Nutzende',
-    'partner' => 'Partner (Behörden, Unternehmen)'];
+/** Rollen, denen je Fachverfahren Alarmkreise zugeordnet werden. Unternehmen und Behörden kommen aus dem Adressbuch. */
+const SBCM_APP_ROLES = ['verantwortlich' => 'Verantwortlich', 'technik' => 'Technik', 'betrieb' => 'Betrieb', 'nutzende' => 'Nutzende'];
 const SBCM_APP_ROLES_DEFAULT = ['verantwortlich', 'technik', 'betrieb', 'nutzende'];
 const SBCM_APP_DSB = ['' => 'keine Angabe', 'normal' => 'normal', 'hoch' => 'hoch', 'sehr_hoch' => 'sehr hoch'];
+/** Vorbelegte DSGVO-Referenz je DSB-Stufe (unter System änderbar). */
+const SBCM_DSGVO_DEFAULTS = [
+    'normal' => 'Art. 6 DSGVO (Rechtmäßigkeit der Verarbeitung)',
+    'hoch' => 'Art. 32 DSGVO (Sicherheit der Verarbeitung), ggf. Art. 33 DSGVO (Meldung an die Aufsichtsbehörde binnen 72 Stunden)',
+    'sehr_hoch' => 'Art. 9 DSGVO (besondere Kategorien), ggf. Art. 33 und 34 DSGVO (Meldung an die Aufsichtsbehörde, Benachrichtigung der Betroffenen)',
+];
+/** Felder, die je Fachverfahren auf der externen Seite erscheinen dürfen. */
+const SBCM_APP_EXT = ['ext_name' => 'Name', 'ext_short' => 'Kürzel', 'ext_login' => 'Link zur Anmeldung', 'ext_help' => 'Link zu Doku, Hilfe, Support'];
 
 /**
  * Fachverfahren (verschlüsselt im kv-Speicher). Je Verfahren: Name, Kürzel, Links, Sichtbarkeit (extern, Grün intern/extern),
- * interne Einstufung (Kategorie, Bereich, DSB-Sensibilität, VSA, KRITIS, Partner) und Alarmkreise je Rolle.
+ * interne Einstufung (Kategorie, Bereich, DSB-Sensibilität, VSA, KRITIS), Unternehmen und Behörden, Infotexte und Alarmkreise je Rolle.
  */
 function apps_all(): array
 {
@@ -1415,6 +1422,7 @@ function apps_all(): array
         return [];
     }
     $circles = array_column(alarm_circles(), 'id');
+    $orgs = array_column(orgs_all(), 'id');
     $out = [];
     foreach ($v as $a) {
         if (!is_array($a) || !preg_match('/^[a-z0-9-]{1,32}$/', (string)($a['id'] ?? '')) || trim((string)($a['name'] ?? '')) === '') {
@@ -1425,15 +1433,22 @@ function apps_all(): array
             // gelöschte Kreise fallen hier heraus
             $roles[$r] = array_values(array_intersect($circles, array_map('strval', (array)($a['roles'][$r] ?? []))));
         }
+        // ältere Einträge ohne Angabe: Name und Kürzel extern wie bisher
+        $ext = [];
+        foreach (SBCM_APP_EXT as $k => $_) {
+            $ext[$k] = array_key_exists($k, $a) ? !empty($a[$k]) : in_array($k, ['ext_name', 'ext_short'], true);
+        }
         $out[] = [
             'id' => (string)$a['id'], 'name' => (string)$a['name'], 'short' => (string)($a['short'] ?? ''),
             'login_url' => (string)($a['login_url'] ?? ''), 'help_url' => (string)($a['help_url'] ?? ''),
             'external' => !empty($a['external']), 'green_int' => !empty($a['green_int']), 'green_ext' => !empty($a['green_ext']),
             'category' => (string)($a['category'] ?? ''), 'area' => (string)($a['area'] ?? ''),
             'dsb' => isset(SBCM_APP_DSB[(string)($a['dsb'] ?? '')]) ? (string)($a['dsb'] ?? '') : '',
-            'vsa' => !empty($a['vsa']), 'kritis' => !empty($a['kritis']), 'partners' => (string)($a['partners'] ?? ''),
+            'vsa' => !empty($a['vsa']), 'kritis' => !empty($a['kritis']),
+            'orgs' => array_values(array_intersect($orgs, array_map('strval', (array)($a['orgs'] ?? [])))),
+            'text_nutzende' => (string)($a['text_nutzende'] ?? ''), 'text_extern' => (string)($a['text_extern'] ?? ''),
             'roles' => $roles,
-        ];
+        ] + $ext;
     }
     return $out;
 }
@@ -1447,7 +1462,7 @@ function apps_by_id(): array
 function app_normalize(array $in): array
 {
     $a = [];
-    foreach (['name' => 80, 'short' => 16, 'login_url' => 300, 'help_url' => 300, 'category' => 60, 'area' => 60, 'partners' => 300] as $k => $max) {
+    foreach (['name' => 80, 'short' => 16, 'login_url' => 300, 'help_url' => 300, 'category' => 60, 'area' => 60] as $k => $max) {
         $a[$k] = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($in[$k] ?? '')) ?? '');
         if (mb_strlen($a[$k]) > $max) {
             return [null, "Feld $k ist zu lang (max. $max Zeichen)."];
@@ -1470,9 +1485,22 @@ function app_normalize(array $in): array
     }
     $dsb = (string)($in['dsb'] ?? '');
     $a['dsb'] = isset(SBCM_APP_DSB[$dsb]) ? $dsb : '';
-    foreach (['external', 'green_int', 'green_ext', 'vsa', 'kritis'] as $k) {
+    foreach (array_merge(['external', 'green_int', 'green_ext', 'vsa', 'kritis'], array_keys(SBCM_APP_EXT)) as $k) {
         $a[$k] = !empty($in[$k]);
     }
+    if ($a['external'] && !$a['ext_name'] && !($a['ext_short'] && $a['short'] !== '')) {
+        return [null, 'Für die externe Ansicht bitte Name oder Kürzel freigeben.'];
+    }
+    foreach (['text_nutzende' => 'Infotext für Nutzende', 'text_extern' => 'Infotext für Unternehmen und Behörden'] as $k => $lbl) {
+        $a[$k] = trim(str_replace("\r", '', preg_replace('/[\x00-\x09\x0B-\x1F\x7F]+/u', ' ', (string)($in[$k] ?? '')) ?? ''));
+        if (mb_strlen($a[$k]) > 600) {
+            return [null, $lbl . ': höchstens 600 Zeichen.'];
+        }
+        if ($hits = critical_terms_in($a[$k], bcm())) {
+            return [null, $lbl . ' enthält kritische Begriffe (' . implode(', ', $hits) . ').'];
+        }
+    }
+    $a['orgs'] = array_values(array_intersect(array_column(orgs_all(), 'id'), array_map('strval', (array)($in['orgs'] ?? []))));
     $circles = array_column(alarm_circles(), 'id');
     $a['roles'] = [];
     foreach (SBCM_APP_ROLES as $r => $_) {
@@ -1498,7 +1526,7 @@ function app_save(string $id, array $in, string $actor, array $how = []): ?strin
     }
     $list = apps_all();
     $flags = array_keys(array_filter(['extern' => $a['external'], 'VSA' => $a['vsa'], 'KRITIS' => $a['kritis']]));
-    $details = ['app' => $a['name'] . ($a['short'] !== '' ? ' (' . $a['short'] . ')' : ''), 'flags' => $flags,
+    $details = ['app' => $a['name'] . ($a['short'] !== '' ? ' (' . $a['short'] . ')' : ''), 'flags' => $flags, 'orgs' => count($a['orgs']),
         'dsb' => SBCM_APP_DSB[$a['dsb']], 'circles' => array_map(fn($r) => SBCM_APP_ROLES[$r] . ': ' . count($a['roles'][$r]), array_keys(SBCM_APP_ROLES))];
     if ($id === '') {
         if (in_array(mb_strtolower($a['name']), array_map(fn($x) => mb_strtolower($x['name']), $list), true)) {
@@ -1551,9 +1579,11 @@ function app_role_circles(array $appIds, array $roles): array
 /** Interne Einstufung als kurze Angaben, z. B. ["DSB: hoch", "KRITIS"] (nur für Personen mit persönlicher Kennung). */
 function app_flags(array $a): array
 {
+    $orgs = array_column(orgs_all(), 'name', 'id');
+    $names = array_values(array_filter(array_map(fn($id) => $orgs[$id] ?? '', (array)($a['orgs'] ?? []))));
     return array_values(array_filter([
         $a['dsb'] !== '' ? 'DSB: ' . SBCM_APP_DSB[$a['dsb']] : '', $a['vsa'] ? 'VSA' : '', $a['kritis'] ? 'KRITIS' : '',
-        $a['partners'] !== '' ? 'Partner: ' . $a['partners'] : '',
+        $names ? 'Unternehmen und Behörden: ' . implode(', ', $names) : '',
     ]));
 }
 
@@ -1578,6 +1608,345 @@ function app_states(array $board, bool $public = false): array
         }
     }
     return $out;
+}
+
+/* ---- Unternehmen und Behörden (Adressbuch für Fachverfahren) ------------- */
+
+/** Adressbuch: [id, name, phone, emails[]]. Adressen verschlüsselt, in der Oberfläche nur maskiert. */
+function orgs_all(): array
+{
+    $v = setting_get('orgs');
+    $out = [];
+    foreach (is_array($v) ? $v : [] as $o) {
+        if (is_array($o) && preg_match('/^[a-z0-9-]{1,32}$/', (string)($o['id'] ?? '')) && trim((string)($o['name'] ?? '')) !== '') {
+            $out[] = ['id' => (string)$o['id'], 'name' => (string)$o['name'], 'phone' => (string)($o['phone'] ?? ''),
+                'emails' => array_values(array_filter(array_map('strval', (array)($o['emails'] ?? [])), fn($e) => filter_var($e, FILTER_VALIDATE_EMAIL)))];
+        }
+    }
+    return $out;
+}
+
+function orgs_store(array $list, string $action, array $details, string $actor, array $how): void
+{
+    tx(function () use ($list, $action, $details, $actor, $how) {
+        setting_set('orgs', array_values($list));
+        audit('setting.' . $action, 'orgs', $details + ['how' => $how], $actor, setting_level($actor));
+    });
+}
+
+/** Eintrag anlegen ($id = '') oder ändern: Name, Rufnummer, Adressen ergänzen ($add) bzw. entfernen ($remove = Positionen). */
+function org_save(string $id, string $name, string $phone, string $add, array $remove, string $actor, array $how = []): ?string
+{
+    $name = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $name) ?? '');
+    $phone = trim($phone);
+    if ($name === '' || mb_strlen($name) > 80) {
+        return 'Name: 1 bis 80 Zeichen.';
+    }
+    if ($phone !== '' && !preg_match('/^[0-9+ ()\/-]{3,40}$/', $phone)) {
+        return 'Rufnummer: nur Ziffern, +, Leerzeichen, ( ) / -';
+    }
+    [$ok, $bad] = parse_email_list($add);
+    if ($bad) {
+        return 'Ungültige Adresse(n): ' . implode(', ', array_map('mask_email', $bad));
+    }
+    $list = orgs_all();
+    if ($id === '') {
+        if (in_array(mb_strtolower($name), array_map(fn($x) => mb_strtolower($x['name']), $list), true)) {
+            return 'Einen Eintrag mit diesem Namen gibt es schon.';
+        }
+        $list[] = ['id' => slug_id($name, array_column($list, 'id'), 'stelle'), 'name' => $name, 'phone' => $phone, 'emails' => $ok];
+        orgs_store($list, 'org_create', ['org' => $name, 'count' => count($ok)], $actor, $how);
+        return null;
+    }
+    $i = array_search($id, array_column($list, 'id'), true);
+    if ($i === false) {
+        return 'Eintrag nicht gefunden.';
+    }
+    $gone = [];
+    foreach ($remove as $r) {
+        if (isset($list[$i]['emails'][(int)$r])) {
+            $gone[] = $list[$i]['emails'][(int)$r];
+        }
+    }
+    $new = array_values(array_diff($ok, $list[$i]['emails']));
+    $list[$i] = ['id' => $id, 'name' => $name, 'phone' => $phone, 'emails' => array_values(array_merge(array_diff($list[$i]['emails'], $gone), $new))];
+    orgs_store($list, 'org_update', ['org' => $name, 'masked' => array_merge(
+        array_map(fn($e) => '+' . mask_email($e), $new), array_map(fn($e) => '-' . mask_email($e), $gone))], $actor, $how);
+    return null;
+}
+
+function org_delete(string $id, string $actor, array $how = []): ?string
+{
+    $list = orgs_all();
+    $i = array_search($id, array_column($list, 'id'), true);
+    if ($i === false) {
+        return 'Eintrag nicht gefunden.';
+    }
+    $name = $list[$i]['name'];
+    array_splice($list, $i, 1);
+    orgs_store($list, 'org_delete', ['org' => $name], $actor, $how);
+    return null;
+}
+
+/* ---- Pflicht-Benachrichtigungen bei Meldungen zu Fachverfahren ----------- */
+
+/** Zieladressen: Informationssicherheit (jede Meldung), VSA (Verfahren mit VSA), Datenschutz (ab DSB "hoch"). */
+const SBCM_FV_TARGETS = ['isb' => 'Informationssicherheit', 'vsa' => 'VSA (Geheimschutz)', 'dsb' => 'Datenschutz'];
+
+/** Empfängergruppen der Pflicht-Mails mit vorbelegtem Infotext (unter System änderbar). */
+const SBCM_FV_TEXTS = [
+    'intern' => ['Verantwortlich, Technik, Betrieb',
+        'Bitte prüfen Sie die Auswirkungen in Ihrem Bereich und stimmen Sie das weitere Vorgehen ab.'],
+    'nutzende' => ['Nutzende',
+        'Bitte nutzen Sie bis auf Weiteres die vereinbarten Ersatzverfahren. Wir informieren Sie, sobald die Anwendung wieder wie gewohnt nutzbar ist.'],
+    'extern' => ['Unternehmen und Behörden',
+        'Sie erhalten diese Information, weil Sie mit dieser Anwendung zusammenarbeiten. Wir melden uns, sobald sie wieder wie gewohnt nutzbar ist.'],
+    'sicherheit' => ['Informationssicherheit, VSA, Datenschutz',
+        'Bitte prüfen Sie, ob Melde- oder Informationspflichten bestehen.'],
+];
+
+function fv_targets(): array
+{
+    $v = setting_get('fv_targets');
+    $out = [];
+    foreach (SBCM_FV_TARGETS as $k => $_) {
+        $e = is_array($v) ? (string)($v[$k] ?? '') : '';
+        $out[$k] = filter_var($e, FILTER_VALIDATE_EMAIL) ? $e : '';
+    }
+    return $out;
+}
+
+/** Je Ziel: neue Adresse (leer = unverändert) oder $in["rm_$k"] = entfernen. */
+function fv_targets_set(array $in, string $actor, array $how = []): ?string
+{
+    $cur = fv_targets();
+    $new = $cur;
+    $masked = [];
+    foreach (SBCM_FV_TARGETS as $k => $lbl) {
+        $m = strtolower(trim((string)($in[$k] ?? '')));
+        if (!empty($in['rm_' . $k])) {
+            $new[$k] = '';
+        } elseif ($m !== '') {
+            if (!filter_var($m, FILTER_VALIDATE_EMAIL)) {
+                return $lbl . ': bitte eine gültige E-Mail-Adresse angeben.';
+            }
+            $new[$k] = $m;
+        }
+        if ($new[$k] !== $cur[$k]) {
+            $masked[] = $lbl . ': ' . ($new[$k] !== '' ? mask_email($new[$k]) : 'entfernt');
+        }
+    }
+    if (!$masked) {
+        return 'Keine Änderung.';
+    }
+    tx(function () use ($new, $masked, $actor, $how) {
+        setting_set('fv_targets', $new);
+        audit('setting.fv_targets', 'fv_targets', ['masked' => $masked, 'how' => $how], $actor, setting_level($actor));
+    });
+    return null;
+}
+
+function fv_texts(): array
+{
+    $v = setting_get('fv_texts');
+    $out = [];
+    foreach (SBCM_FV_TEXTS as $k => [, $def]) {
+        $out[$k] = is_array($v) && is_string($v[$k] ?? null) && $v[$k] !== '' ? $v[$k] : $def;
+    }
+    return $out;
+}
+
+function dsgvo_refs(): array
+{
+    $v = setting_get('dsgvo_refs');
+    $out = [];
+    foreach (SBCM_DSGVO_DEFAULTS as $k => $def) {
+        $out[$k] = is_array($v) && is_string($v[$k] ?? null) && $v[$k] !== '' ? $v[$k] : $def;
+    }
+    return $out;
+}
+
+/** Infotexte je Empfängergruppe und DSGVO-Referenzen je DSB-Stufe speichern (leer = Vorbelegung). */
+function fv_texts_set(array $in, string $actor, array $how = []): ?string
+{
+    $clean = fn($s) => trim(str_replace("\r", '', preg_replace('/[\x00-\x09\x0B-\x1F\x7F]+/u', ' ', (string)$s) ?? ''));
+    $texts = [];
+    foreach (SBCM_FV_TEXTS as $k => [$lbl]) {
+        $texts[$k] = $clean($in['text_' . $k] ?? '');
+        if (mb_strlen($texts[$k]) > 600) {
+            return 'Infotext ' . $lbl . ': höchstens 600 Zeichen.';
+        }
+    }
+    // Texte für Nutzende und für Unternehmen/Behörden gehen breit hinaus: dieselben Regeln wie Meldungstexte
+    if ($hits = critical_terms_in($texts['nutzende'] . "\n" . $texts['extern'], bcm())) {
+        return 'Die Infotexte für Nutzende bzw. Unternehmen und Behörden enthalten kritische Begriffe (' . implode(', ', $hits) . ').';
+    }
+    $refs = [];
+    foreach (SBCM_DSGVO_DEFAULTS as $k => $_) {
+        $refs[$k] = $clean($in['ref_' . $k] ?? '');
+        if (mb_strlen($refs[$k]) > 200) {
+            return 'DSGVO-Referenz ' . SBCM_APP_DSB[$k] . ': höchstens 200 Zeichen.';
+        }
+    }
+    tx(function () use ($texts, $refs, $actor, $how) {
+        setting_set('fv_texts', $texts);
+        setting_set('dsgvo_refs', $refs);
+        audit('setting.fv_texts', 'fv_texts', ['how' => $how], $actor, setting_level($actor));
+    });
+    return null;
+}
+
+/** Name eines Fachverfahrens für die externe Ansicht (nur freigegebene Felder). */
+function app_public_name(array $a): string
+{
+    $short = $a['ext_short'] ? $a['short'] : '';
+    if ($a['ext_name']) {
+        return $a['name'] . ($short !== '' ? ' (' . $short . ')' : '');
+    }
+    return $short;
+}
+
+/**
+ * Pflicht-Mails zu einer Meldung über Fachverfahren: je Verfahren an die Kreise von Verantwortlich/Technik/Betrieb,
+ * an die Nutzenden und an die zugeordneten Unternehmen und Behörden (nur allgemeine Fassung, keine Übungen); dazu
+ * an Informationssicherheit (immer), VSA (Verfahren mit VSA) und Datenschutz (ab DSB "hoch"), jeweils mit eigenem Infotext.
+ * Rückgabe: Liste [group, title, emails[], subject, body, missing].
+ */
+function app_notice_plan(string $kind, array $payload, ?string $validUntil): array
+{
+    $byId = apps_by_id();
+    $apps = [];
+    foreach ((array)($payload['apps'] ?? []) as $p) {
+        if (isset($byId[(string)($p['id'] ?? '')])) {
+            $apps[] = $byId[$p['id']];
+        }
+    }
+    if (!$apps) {
+        return [];
+    }
+    $circles = array_column(alarm_circles(), null, 'id');
+    $orgs = array_column(orgs_all(), null, 'id');
+    $texts = fv_texts();
+    $targets = fv_targets();
+    $refs = dsgvo_refs();
+    $vars = mail_vars_status($payload, $validUntil);
+    $end = $kind === 'end';
+    $pre = trim(mail_prefixes()[$kind] ?? '');
+    $base = rtrim((string)cfg('app.base_url'), '/') . '/';
+    $mailsOf = function (array $ids) use ($circles): array {
+        $m = [];
+        foreach ($ids as $c) {
+            foreach ($circles[$c]['emails'] ?? [] as $e) {
+                $m[strtolower($e)] = strtolower($e);
+            }
+        }
+        return array_values($m);
+    };
+    $appText = function (array $a): string {
+        $o = '- ' . $a['name'] . ($a['short'] !== '' ? ' (' . $a['short'] . ')' : '') . "\n";
+        $o .= $a['login_url'] !== '' ? '  Anmeldung: ' . $a['login_url'] . "\n" : '';
+        return $o . ($a['help_url'] !== '' ? '  Doku, Hilfe, Support: ' . $a['help_url'] . "\n" : '');
+    };
+    $status = $end ? 'Die Meldung "' . $payload['label'] . '" ist beendet (zurückgenommen / gelöst).' . "\n"
+        : 'Status: ' . $payload['label'] . "\n" . $payload['text'] . "\n" . ($vars['validity'] !== '' ? $vars['validity'] . "\n" : '');
+    $intern = function (string $info, string $appsBlock) use ($status, $base): string {
+        return $info . "\n\n" . $status . "\nBetroffene Fachverfahren:\n" . $appsBlock . "\nAktueller Stand: " . $base . "\n";
+    };
+    $subj = fn(string $names) => trim($pre . ' ' . $vars['prefix'] . $payload['label'] . ': ' . $names);
+    $plan = [];
+    foreach ($apps as $a) {
+        $nm = $a['name'] . ($a['short'] !== '' ? ' (' . $a['short'] . ')' : '');
+        $roleMails = $mailsOf(array_merge($a['roles']['verantwortlich'], $a['roles']['technik'], $a['roles']['betrieb']));
+        $plan[] = ['group' => 'intern', 'title' => SBCM_FV_TEXTS['intern'][0] . ' · ' . $a['name'], 'emails' => $roleMails,
+            'subject' => $subj($nm), 'body' => $intern($texts['intern'], $appText($a)), 'missing' => false];
+        $plan[] = ['group' => 'nutzende', 'title' => 'Nutzende · ' . $a['name'], 'emails' => $mailsOf($a['roles']['nutzende']),
+            'subject' => $subj($nm), 'body' => $intern($a['text_nutzende'] !== '' ? $a['text_nutzende'] : $texts['nutzende'], $appText($a)), 'missing' => false];
+        if (!empty($payload['exercise']) || !$a['orgs']) {
+            continue;
+        }
+        // Unternehmen und Behörden: nur die allgemeine Fassung, keine Ursachen, keine internen Angaben
+        $m = [];
+        $names = [];
+        foreach ($a['orgs'] as $oid) {
+            $names[] = $orgs[$oid]['name'];
+            foreach ($orgs[$oid]['emails'] as $e) {
+                $m[strtolower($e)] = strtolower($e);
+            }
+        }
+        $pp = public_page();
+        $contact = array_filter([$pp['phone'] !== '' ? 'Telefon: ' . $pp['phone'] : '', $pp['email'] !== '' ? 'E-Mail: ' . $pp['email'] : '',
+            $pp['ticket_url'] !== '' ? $pp['ticket_label'] . ': ' . $pp['ticket_url'] : '', $pp['hours'] !== '' ? 'Erreichbarkeit: ' . $pp['hours'] : '']);
+        $plabel = (string)($payload['public_label'] ?? $payload['label']);
+        $body = ($a['text_extern'] !== '' ? $a['text_extern'] : $texts['extern']) . "\n\n" . 'Anwendung: ' . $nm . "\n"
+            . ($end ? "Die Meldung zu dieser Anwendung ist beendet.\n" : 'Stand: ' . $plabel . "\n" . (string)($payload['public_text'] ?? '') . "\n")
+            . ($contact ? "\nKontakt:\n" . implode("\n", $contact) . "\n" : '')
+            . ($pp['enabled'] ? "\nAktueller Stand: " . $base . "extern.php\n" : '');
+        $plan[] = ['group' => 'extern', 'title' => SBCM_FV_TEXTS['extern'][0] . ' · ' . $a['name'] . ' (' . implode(', ', $names) . ')',
+            'emails' => array_values($m), 'subject' => trim('Information zu ' . $nm . ': ' . ($end ? 'Meldung beendet' : $plabel)), 'body' => $body, 'missing' => false];
+    }
+    // Informationssicherheit, VSA, Datenschutz: mit interner Einstufung
+    $classify = function (array $a) use ($refs, $orgs): string {
+        $o = '- ' . $a['name'] . ($a['short'] !== '' ? ' (' . $a['short'] . ')' : '') . "\n";
+        $info = array_filter([$a['category'], $a['area']]);
+        $o .= $info ? '  ' . implode(' · ', $info) . "\n" : '';
+        if ($a['dsb'] !== '') {
+            $o .= '  DSB: ' . SBCM_APP_DSB[$a['dsb']] . ' – ' . $refs[$a['dsb']] . "\n";
+        }
+        $o .= '  VSA: ' . ($a['vsa'] ? 'ja' : 'nein') . ' · KRITIS: ' . ($a['kritis'] ? 'ja' : 'nein') . "\n";
+        $n = array_map(fn($id) => $orgs[$id]['name'], $a['orgs']);
+        return $o . ($n ? '  Unternehmen und Behörden: ' . implode(', ', $n) . "\n" : '');
+    };
+    foreach (['isb' => fn($a) => true, 'vsa' => fn($a) => $a['vsa'], 'dsb' => fn($a) => in_array($a['dsb'], ['hoch', 'sehr_hoch'], true)] as $k => $f) {
+        $sel = array_values(array_filter($apps, $f));
+        if (!$sel) {
+            continue;
+        }
+        $plan[] = ['group' => 'sicherheit', 'title' => SBCM_FV_TARGETS[$k], 'emails' => $targets[$k] !== '' ? [$targets[$k]] : [],
+            'subject' => $subj(implode(', ', array_column($sel, 'name'))),
+            'body' => $intern($texts['sicherheit'], implode('', array_map($classify, $sel))), 'missing' => $targets[$k] === ''];
+    }
+    return $plan;
+}
+
+/** Alle Adressen der Pflicht-Mails (damit die ALARM-Mail sie nicht doppelt erreicht). */
+function app_notice_emails(array $payload): array
+{
+    $m = [];
+    foreach (app_notice_plan('new', $payload, null) as $p) {
+        foreach ($p['emails'] as $e) {
+            $m[$e] = $e;
+        }
+    }
+    return array_values($m);
+}
+
+/** Pflicht-Mails versenden: An = Adresse im An-Feld, Empfänger nur per BCC; Ergebnis und Gruppen (ohne Adressen) im Protokoll. */
+function send_app_notices(string $kind, int $statusId, array $payload, ?string $validUntil, string $author): array
+{
+    $to = alarm_to_address();
+    $sum = ['total' => 0, 'ok' => 0, 'failed' => 0, 'missing' => []];
+    $groups = [];
+    foreach (app_notice_plan($kind, $payload, $validUntil) as $p) {
+        if ($p['missing']) {
+            $sum['missing'][] = $p['title'];
+        }
+        $bcc = array_values(array_diff($p['emails'], [$to]));
+        if (!$bcc) {
+            continue;
+        }
+        $groups[] = $p['title'] . ': ' . count($bcc);
+        foreach (array_chunk($bcc, max(1, (int)cfg('mail.max_bcc_per_message', 50))) as $chunk) {
+            $res = mail_deliver(['to' => $to !== '' ? [$to] : [], 'bcc' => $chunk, 'subject' => $p['subject'], 'body' => $p['body'],
+                'priority' => ($payload['severity'] ?? '') === 'critical' && $kind !== 'end']);
+            $r = mail_record('app_notice', $statusId, $p['subject'], $p['body'], $res);
+            foreach (['total', 'ok', 'failed'] as $k) {
+                $sum[$k] += $r[$k];
+            }
+        }
+    }
+    audit('mail.app_notice', 'status:' . $statusId, ['kind' => $kind, 'groups' => $groups, 'missing_targets' => $sum['missing'],
+        'recipients' => $sum['total'], 'ok' => $sum['ok'], 'failed' => $sum['failed']], $author, setting_level($author));
+    return $sum;
 }
 
 /* ---- Externe Statusseite (ohne Login) ------------------------------------ */
@@ -2667,6 +3036,9 @@ function audit_describe(string $action, array $d): string
         'setting.default_phone' => 'Standard-Rufnummer geändert', 'setting.circle_channels' => 'Alarmkreis: Signal/GroupAlarm geändert',
         'setting.app_create' => 'Fachverfahren angelegt', 'setting.app_update' => 'Fachverfahren geändert', 'setting.app_delete' => 'Fachverfahren gelöscht',
         'setting.public_page' => 'Externe Statusseite geändert',
+        'setting.org_create' => 'Unternehmen/Behörde angelegt', 'setting.org_update' => 'Unternehmen/Behörde geändert', 'setting.org_delete' => 'Unternehmen/Behörde gelöscht',
+        'setting.fv_targets' => 'Zieladressen Fachverfahren geändert', 'setting.fv_texts' => 'Infotexte und DSGVO-Referenzen geändert',
+        'mail.app_notice' => 'Pflicht-Mails zu Fachverfahren versendet',
         'channel.alarm' => 'Alarm über Signal/GroupAlarm', 'audit.export' => 'Protokoll exportiert', 'monitor.cron_stale' => 'Warnung: Cron läuft nicht',
     ];
     $s = $labels[$action] ?? $action;
@@ -2694,6 +3066,12 @@ function audit_describe(string $action, array $d): string
     if (!empty($d['location_recipients'])) {
         $parts[] = 'Standortadressen: ' . (int)$d['location_recipients'];
     }
+    if (!empty($d['groups']) && is_array($d['groups'])) {
+        $parts[] = 'Gruppen: ' . implode('; ', array_map('strval', $d['groups']));
+    }
+    if (!empty($d['missing_targets']) && is_array($d['missing_targets'])) {
+        $parts[] = 'ohne Zieladresse: ' . implode(', ', array_map('strval', $d['missing_targets']));
+    }
     if (!empty($d['level']) && is_string($d['level'])) {
         $parts[] = 'Stufe: ' . $d['level'];
     }
@@ -2703,7 +3081,7 @@ function audit_describe(string $action, array $d): string
     if (isset($d['enabled']) && is_bool($d['enabled'])) {
         $parts[] = $d['enabled'] ? 'eingeschaltet' : 'ausgeschaltet';
     }
-    foreach (['circle' => 'Kreis', 'location' => 'Standort', 'contact' => 'Kontakt', 'app' => 'Fachverfahren'] as $f => $lbl) {
+    foreach (['circle' => 'Kreis', 'location' => 'Standort', 'contact' => 'Kontakt', 'app' => 'Fachverfahren', 'org' => 'Unternehmen/Behörde'] as $f => $lbl) {
         if (!empty($d[$f]) && is_string($d[$f])) {
             $parts[] = $lbl . ': ' . $d[$f];
         }
@@ -3036,6 +3414,10 @@ function spec_needs_totp(array $spec): bool
     if (!empty($spec['alarm_mail'])) {
         return true;
     }
+    // Fachverfahren: jede Meldung verschickt Pflicht-Mails (auch an Unternehmen und Behörden)
+    if (!empty($spec['app_ids'])) {
+        return true;
+    }
     // Beenden wie Setzen: Wer eine echte Warnung still beenden kann, erzeugt eine falsche Entwarnung.
     $def = bcm()['by_key'][$spec['key']] ?? null;
     return $def && $def['require_totp'];
@@ -3070,7 +3452,12 @@ function alarm_targets(array $spec, array $payload): array
     foreach (level_cc()[$sev] ?? [] as $e) {
         $mails[$e] = $e;
     }
-    return [array_values(array_unique(array_merge(array_values($mails), array_values($locMails)))), $names, count($locMails)];
+    $all = array_values(array_unique(array_merge(array_values($mails), array_values($locMails))));
+    // Fachverfahren: wer schon eine Pflicht-Mail bekommt, erhält die ALARM-Mail nicht noch einmal
+    if (!empty($payload['apps'])) {
+        $all = array_values(array_diff(array_map('strtolower', $all), app_notice_emails($payload)));
+    }
+    return [$all, $names, count($locMails)];
 }
 
 /** Validiert Formulareingaben -> [spec|null, Fehlerliste]. $target: betroffene Meldung bei extend/update/end. */
@@ -3674,6 +4061,9 @@ function run_cron(?int $nowTs = null): array
             $res2 = mail_deliver(['to' => $to, 'cc' => $cc1 !== '' ? [$cc1] : [], 'subject' => $subject, 'body' => $body]);
             $sum = mail_record('autorevert', (int)$res['id'], $subject, $body, $res2);
             audit('mail.autorevert', 'status:' . $res['id'], ['recipients' => $sum['total'], 'ok' => $sum['ok'], 'failed' => $sum['failed']], 'system:cron', 0);
+            if (!empty($res['payload']['apps'])) {
+                send_app_notices('end', (int)$res['id'], $res['payload'], $res['valid_until'], 'system:cron');
+            }
             $log[] = "Meldung #{$r['id']} ($label) automatisch beendet";
             continue;
         }
@@ -3877,6 +4267,21 @@ function system_check(): array
         }
     }
     $chk(!is_file(__DIR__ . '/install.php') || is_installed(), 'Einrichtungsassistent gesperrt');
+    try {
+        $apps = $keyOk && is_installed() ? apps_all() : [];
+        if ($apps) {
+            $t = fv_targets();
+            $chk($t['isb'] !== '', 'Fachverfahren: Zieladresse Informationssicherheit' . ($t['isb'] !== '' ? '' : ' fehlt (unten unter "Fachverfahren: Zieladressen")'));
+            if (array_filter($apps, fn($a) => $a['vsa'])) {
+                $chk($t['vsa'] !== '', 'Fachverfahren mit VSA: Zieladresse VSA' . ($t['vsa'] !== '' ? '' : ' fehlt'));
+            }
+            if (array_filter($apps, fn($a) => in_array($a['dsb'], ['hoch', 'sehr_hoch'], true))) {
+                $chk($t['dsb'] !== '', 'Fachverfahren ab DSB "hoch": Zieladresse Datenschutz' . ($t['dsb'] !== '' ? '' : ' fehlt'));
+            }
+        }
+    } catch (Throwable $e) {
+        // Prüfung der Fachverfahren ist nur ein Hinweis
+    }
     return $r;
 }
 
@@ -4202,6 +4607,110 @@ function render_app_overview(array $board): void
             . '</div>' . render_app_meta($a, true, $personal) . '</li>';
     }
     echo '</ul></div></section>';
+}
+
+/* ---- Öffentliche Ansicht (Startseite und extern.php) --------------------- */
+
+/** Extern sichtbare Fachverfahren mit Zustand, sortiert (schwerste zuerst). Rückgabe: [[rang, verfahren, meldung|null], …] */
+function public_rows(): array
+{
+    $states = app_states(status_board(), true);
+    $rank = ['critical' => 0, 'warn' => 1, 'info' => 2];
+    $rows = [];
+    foreach (apps_all() as $a) {
+        if (!$a['external'] || app_public_name($a) === '') {
+            continue;
+        }
+        $st = $states[$a['id']] ?? null;
+        if ($st || $a['green_ext']) {
+            $rows[] = [$st ? ($rank[$st['severity']] ?? 3) : 9, $a, $st];
+        }
+    }
+    usort($rows, fn($x, $y) => [$x[0], $x[1]['name']] <=> [$y[0], $y[1]['name']]);
+    return $rows;
+}
+
+/** Öffentlicher Status: nur freigegebene Felder, nur die allgemeine Textfassung. $hl = Ebene der Überschrift. */
+function render_public_status(array $pp, array $rows, int $hl = 1): void
+{
+    $hc = $hl === 1 ? 'h4' : 'h5';
+    echo '<section class="mb-3" aria-labelledby="pubh"><h' . $hl . ' class="' . $hc . ' mb-2" id="pubh">' . h($pp['title']) . '</h' . $hl . '>';
+    if ($pp['intro'] !== '') {
+        echo '<p>' . h($pp['intro']) . '</p>';
+    }
+    if (!array_filter($rows, fn($r) => $r[2] !== null)) {
+        echo '<div class="card shadow-sm mb-3 status-card sev-ok"><div class="card-body"><p class="mb-0">Derzeit liegen keine Meldungen zu unseren Anwendungen vor.</p></div></div>';
+    }
+    $texts = [];
+    if ($rows) {
+        echo '<ul class="list-group mb-3">';
+        foreach ($rows as [, $a, $st]) {
+            echo '<li class="list-group-item app-row' . ($st ? ' sev-' . h($st['severity']) : ' app-ok') . '"><div class="d-flex flex-wrap justify-content-between gap-2">'
+                . '<span class="fw-semibold">' . h(app_public_name($a)) . '</span>';
+            if ($st) {
+                $p = $st['payload'];
+                echo '<span class="badge ' . ($st['severity'] === 'critical' ? 'text-bg-danger' : ($st['severity'] === 'warn' ? 'text-bg-warning' : 'text-bg-primary')) . '">'
+                    . h((string)($p['public_label'] ?? $p['label'])) . '</span>';
+                $texts[(string)($p['public_text'] ?? '')] = true;
+            } else {
+                echo '<span class="badge text-bg-success">Verfügbar</span>';
+            }
+            echo '</div>';
+            $l = [];
+            if ($a['ext_login'] && $a['login_url'] !== '') {
+                $l[] = '<a href="' . h($a['login_url']) . '" rel="nofollow noopener noreferrer">Zur Anmeldung<span class="visually-hidden"> ' . h(app_public_name($a)) . '</span></a>';
+            }
+            if ($a['ext_help'] && $a['help_url'] !== '') {
+                $l[] = '<a href="' . h($a['help_url']) . '" rel="nofollow noopener noreferrer">Doku, Hilfe, Support<span class="visually-hidden"> ' . h(app_public_name($a)) . '</span></a>';
+            }
+            if ($l) {
+                echo '<div class="small d-flex flex-wrap gap-3">' . implode('', $l) . '</div>';
+            }
+            if ($st) {
+                echo '<div class="small text-body-secondary">Stand: ' . h(fmt_local((string)$st['created_at'])) . ' Uhr</div>';
+            }
+            echo '</li>';
+        }
+        echo '</ul>';
+    }
+    foreach (array_keys(array_filter($texts)) as $t) {
+        echo '<p>' . h($t) . '</p>';
+    }
+    echo '</section>';
+}
+
+/** Kontakt der öffentlichen Ansicht: Daten erst nach "Kontakt anzeigen" (POST an extern.php mit Zeit-Token und Honeypot). */
+function render_public_contact(array $pp, bool $reveal, string $hint = '', int $hl = 2): void
+{
+    if ($pp['phone'] === '' && $pp['email'] === '' && $pp['ticket_url'] === '') {
+        return;
+    }
+    echo '<section class="card shadow-sm mb-3" id="kontakt"><div class="card-body"><h' . $hl . ' class="h5">Kontakt</h' . $hl . '>';
+    if ($pp['hours'] !== '') {
+        echo '<p class="small">Erreichbarkeit: ' . h($pp['hours']) . '</p>';
+    }
+    if ($reveal) {
+        echo '<ul class="list-unstyled mb-0">';
+        if ($pp['phone'] !== '') {
+            echo '<li>Telefon: <a class="tel" href="' . h(tel_href($pp['phone'])) . '">' . h($pp['phone']) . '</a></li>';
+        }
+        if ($pp['email'] !== '') {
+            echo '<li>E-Mail: <a href="mailto:' . h($pp['email']) . '">' . h($pp['email']) . '</a></li>';
+        }
+        if ($pp['ticket_url'] !== '') {
+            echo '<li><a href="' . h($pp['ticket_url']) . '" rel="nofollow noopener noreferrer">' . h($pp['ticket_label'] ?: 'Ticketsystem') . '</a></li>';
+        }
+        echo '</ul>';
+    } else {
+        if ($hint !== '') {
+            echo '<div class="alert alert-warning py-2 small" role="alert">' . h($hint) . '</div>';
+        }
+        echo '<form method="post" action="extern.php#kontakt"><input type="hidden" name="t" value="' . h(public_reveal_token()) . '">'
+            . '<div class="hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>'
+            . '<button class="btn btn-outline-primary" type="submit">Kontakt anzeigen</button></form>'
+            . '<p class="small text-body-secondary mt-2 mb-0">Die Kontaktdaten werden zum Schutz vor automatischem Auslesen erst auf Klick angezeigt.</p>';
+    }
+    echo '</div></section>';
 }
 
 /** Alle Meldungen: gültige (oder "Regelbetrieb"), darunter ausgegraut die abgelaufenen/beendeten der letzten Stunden. */

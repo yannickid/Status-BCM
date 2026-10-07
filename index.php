@@ -1,6 +1,7 @@
 <?php
 /**
- * Hauptseite: ein Anmeldeformular für beide Stufen.
+ * Hauptseite: ein Anmeldeformular für beide Stufen. Ist die externe Ansicht eingeschaltet, steht hier auch der öffentliche
+ * Status der Fachverfahren; liegt eine öffentliche Meldung vor, steht er oben und die Anmeldung darunter.
  * Benutzername des gemeinsamen Zugangs + Zugangspasswort -> Statusseite (Stufe 1, Crawler-/Zufallsschutz).
  * Persönliche Kennung + Passwort + TOTP-Code -> zusätzlich Einstellungen (Stufe 2); kritische Änderungen verlangen
  * zusätzlich je Aktion einen TOTP-Code.
@@ -83,10 +84,19 @@ if ($pending === null && stage2_user()) {
 }
 
 $title = (string)cfg('app.title', 'Status');
+$pp = $pending === null && is_installed() ? public_page() : ['enabled' => false];
+$pubRows = $pp['enabled'] ? public_rows() : [];
+$pubFirst = $pp['enabled'] && array_filter($pubRows, fn($r) => $r[2] !== null);
 page_start($title);
 echo '<div class="row justify-content-center"><div class="col-12 col-sm-10 col-md-8">';
 echo '<h1 class="h3 my-3">' . h($title) . '</h1>';
-echo '<div class="card shadow-sm"><div class="card-body">';
+if ($pubFirst) {
+    render_public_status($pp, $pubRows, 2);
+}
+echo '<div class="card shadow-sm mb-3"><div class="card-body">';
+if ($pp['enabled']) {
+    echo '<h2 class="h5">Anmeldung</h2>';
+}
 if ($err) {
     echo '<div class="alert alert-danger" role="alert">' . h($err) . '</div>';
 }
@@ -99,14 +109,17 @@ if ($pending !== null) {
 echo '<form method="post" action="index.php" autocomplete="off">';
 echo csrf_field() . '<input type="hidden" name="action" value="login">';
 echo '<label class="form-label" for="us">Benutzername</label>';
-echo '<input class="form-control form-control-lg mb-3" id="us" type="text" name="user" value="' . h((string)($_POST['user'] ?? '')) . '" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64" required autofocus>';
+echo '<input class="form-control form-control-lg mb-3" id="us" type="text" name="user" value="' . h((string)($_POST['user'] ?? '')) . '" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64" required' . ($pubFirst ? '' : ' autofocus') . '>';
 echo '<label class="form-label" for="pw">Passwort</label>';
 echo '<input class="form-control form-control-lg mb-3" id="pw" type="password" name="password" autocomplete="current-password" required>';
 echo '<div class="hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>';
 echo '<div class="d-grid"><button class="btn btn-primary btn-lg" type="submit">Anmelden</button></div>';
 echo '</form></div></div>';
-if (is_installed() && public_page()['enabled']) {
-    echo '<p class="small mt-3"><a href="extern.php">' . h(public_page()['title']) . '</a> (ohne Anmeldung)</p>';
+if ($pp['enabled']) {
+    if (!$pubFirst) {
+        render_public_status($pp, $pubRows, 2);
+    }
+    render_public_contact($pp, false);
 }
 echo '</div></div>';
 page_end();

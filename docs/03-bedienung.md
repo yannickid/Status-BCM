@@ -116,10 +116,12 @@ Das vollständige Protokoll exportieren Admins unter **System → Protokoll-Expo
 
 ### Fachverfahren
 
-Status mit dem Zusatz "Fachverfahren" (Geplante Wartung, eingeschränkt nutzbar, nicht verfügbar) wählen, die betroffenen
-Verfahren ankreuzen und bei ALARM-Mail die Rollen wählen (Partner sind nicht vorausgewählt). Die Vorschau zeigt Hinweise
-aus der Einstufung (z. B. KRITIS-Meldepflichten, Partner) und was extern erscheint. Auf der Statusseite steht unter den
-Meldungen die Übersicht **Fachverfahren**. Pflege der Verfahren und der externen Seite: Menü **Fachverfahren** (Admins).
+Status mit dem Zusatz "Fachverfahren" (Geplante Wartung, eingeschränkt nutzbar, nicht verfügbar) wählen und die betroffenen
+Verfahren ankreuzen. Jede solche Meldung benachrichtigt automatisch alle hinterlegten Stellen (Rollen-Kreise, Nutzende,
+Unternehmen und Behörden, Informationssicherheit, VSA, Datenschutz) und verlangt deshalb immer den TOTP-Code. Die Vorschau
+zeigt jede Empfängergruppe, Hinweise aus der Einstufung (z. B. KRITIS-Meldepflichten, DSGVO-Referenz) und was öffentlich
+erscheint. ALARM zusätzlich alarmiert auch über Signal und GroupAlarm. Auf der Statusseite steht unter den Meldungen die
+Übersicht **Fachverfahren**. Pflege: Menü **Fachverfahren**; Adressbuch, Zieladressen und Infotexte unter **System** (Admins).
 Details: [Fachverfahren](08-fachverfahren.md).
 
 ### Aushang drucken

@@ -1,7 +1,7 @@
 <?php
 /**
  * System – nur Login Stufe 2 mit Rolle "admin". Ersetzt die Kommandozeile für den laufenden Betrieb:
- * Systemprüfung, Cron, Alarmkreise, Standorte, Kontakte, Betreff-Präfixe, Kopie-Adresse (cc_default_mail1), Zugangspasswort Stufe 1, Testmail, Nutzung.
+ * Systemprüfung, Cron, Alarmkreise, Standorte, Kontakte, Unternehmen und Behörden, Zieladressen und Infotexte für Fachverfahren, Betreff-Präfixe, Kopie-Adresse (cc_default_mail1), Zugangspasswort Stufe 1, Testmail, Nutzung.
  * Jede Änderung verlangt den TOTP-Code des Admins und wird im Audit-Log protokolliert.
  */
 declare(strict_types=1);
@@ -55,7 +55,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             : 'Testmail fehlgeschlagen. SMTP-Daten in config.local.inc.php prüfen (Fehlerdetails im Server-Fehlerlog).');
         redirect('system.php');
     } elseif (!in_array($act, ['circle_create', 'circle_update', 'circle_delete', 'circle_channels', 'signal_test', 'location_save', 'location_delete',
-        'contact_save', 'contact_delete', 'prefix', 'cc1', 'alarm_to', 'level_cc', 'default_phone', 'stage1', 'stage1_user'], true)) {
+        'contact_save', 'contact_delete', 'org_save', 'org_delete', 'fv_targets', 'fv_texts', 'prefix', 'cc1', 'alarm_to', 'level_cc', 'default_phone', 'stage1', 'stage1_user'], true)) {
         $errors[] = 'Ungültige Aktion.';
     } elseif ($err = admin_totp_check($user, 'system', $act)) {
         $errors[] = $err;
@@ -66,6 +66,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             'circle_create' => 'Alarmkreis angelegt.', 'circle_update' => 'Alarmkreis geändert.', 'circle_delete' => 'Alarmkreis gelöscht.',
             'location_save' => 'Standort gespeichert.', 'location_delete' => 'Standort gelöscht.',
             'contact_save' => 'Kontakt gespeichert.', 'contact_delete' => 'Kontakt gelöscht.',
+            'org_save' => 'Eintrag im Adressbuch gespeichert.', 'org_delete' => 'Eintrag im Adressbuch gelöscht.',
+            'fv_targets' => 'Zieladressen gespeichert.', 'fv_texts' => 'Infotexte und DSGVO-Referenzen gespeichert.',
             'prefix' => 'Betreff-Präfixe gespeichert.', 'cc1' => 'Kopie-Adresse gespeichert.',
             'alarm_to' => 'Adresse im An-Feld gespeichert.', 'level_cc' => 'Zusätzliche Empfänger der Stufe gespeichert.',
             'default_phone' => 'Standard-Rufnummer gespeichert.',
@@ -112,6 +114,18 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 break;
             case 'contact_delete':
                 $err = $del ? contact_delete($id, $user['id'], $how) : 'Bitte das Löschen bestätigen.';
+                break;
+            case 'org_save':
+                $err = org_save($id, (string)($_POST['name'] ?? ''), (string)($_POST['phone'] ?? ''), (string)($_POST['emails'] ?? ''), $rm, $user['id'], $how);
+                break;
+            case 'org_delete':
+                $err = $del ? org_delete($id, $user['id'], $how) : 'Bitte das Löschen bestätigen.';
+                break;
+            case 'fv_targets':
+                $err = fv_targets_set($_POST, $user['id'], $how);
+                break;
+            case 'fv_texts':
+                $err = fv_texts_set($_POST, $user['id'], $how);
                 break;
             case 'prefix':
                 $err = mail_prefixes_set($_POST, $user['id'], $how);
@@ -313,6 +327,61 @@ foreach ($contacts as $n => $c) {
 }
 echo '<details class="mt-2"><summary class="small">Neuen Kontakt anlegen</summary>' . $conForm([], 'new') . '</details>';
 echo '</div></div>';
+
+/* Fachverfahren: Zieladressen */
+$fvt = fv_targets();
+echo '<div class="card shadow-sm mb-3" id="fv-ziele"><div class="card-body"><h2 class="h5">Fachverfahren: Zieladressen</h2>';
+echo '<p class="small text-body-secondary">Erhalten bei jeder Meldung zu einem Fachverfahren automatisch eine E-Mail mit der internen Einstufung: '
+    . 'Informationssicherheit immer, VSA bei Verfahren mit VSA, Datenschutz ab DSB-Stufe "hoch" (mit DSGVO-Referenz). Verschlüsselt gespeichert, nur maskiert sichtbar.</p>';
+echo '<form method="post" action="system.php" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="fv_targets">';
+foreach (SBCM_FV_TARGETS as $k => $lbl) {
+    echo '<fieldset class="mb-2"><legend class="small fw-semibold mb-1">' . h($lbl) . ': ' . h($fvt[$k] !== '' ? mask_email($fvt[$k]) : 'nicht gesetzt') . '</legend>'
+        . '<label class="form-label small" for="fv' . $k . '">Neue Adresse (leer = unverändert)</label>'
+        . '<input class="form-control mb-1" id="fv' . $k . '" type="email" name="' . $k . '" maxlength="120">'
+        . ($fvt[$k] !== '' ? '<div class="form-check"><input class="form-check-input" type="checkbox" name="rm_' . $k . '" value="1" id="fvrm' . $k . '">'
+            . '<label class="form-check-label small" for="fvrm' . $k . '">Adresse entfernen</label></div>' : '') . '</fieldset>';
+}
+echo totp_input('fv') . '<button class="btn btn-sm btn-primary" type="submit">Speichern</button></form></div></div>';
+
+/* Unternehmen und Behörden (Adressbuch) */
+$orgs = orgs_all();
+echo '<div class="card shadow-sm mb-3" id="adressbuch"><div class="card-body"><h2 class="h5">Unternehmen und Behörden (' . count($orgs) . ')</h2>';
+echo '<p class="small text-body-secondary">Adressbuch für Fachverfahren. Die Zuordnung erfolgt je Verfahren unter <a href="verfahren.php">Fachverfahren</a>. '
+    . 'Die Einträge erhalten nur die allgemeine Fassung einer Meldung (keine Ursachen, keine Übungen). Adressen verschlüsselt, nur maskiert sichtbar.</p>';
+$orgForm = function (array $o, string $sfx): string {
+    return '<form method="post" action="system.php" class="mt-2" autocomplete="off">' . csrf_field()
+        . '<input type="hidden" name="action" value="org_save"><input type="hidden" name="id" value="' . h($o['id']) . '">'
+        . '<label class="form-label small" for="on' . $sfx . '">Name</label><input class="form-control mb-2" id="on' . $sfx . '" name="name" maxlength="80" value="' . h($o['name']) . '" required>'
+        . '<label class="form-label small" for="op' . $sfx . '">Rufnummer (optional)</label><input class="form-control mb-2" id="op' . $sfx . '" name="phone" type="tel" maxlength="40" value="' . h($o['phone']) . '">'
+        . ($o['id'] !== '' ? email_remove_list($o['emails'], $sfx) : '')
+        . '<label class="form-label small" for="oe' . $sfx . '">E-Mail-Adressen hinzufügen (eine je Zeile)</label>'
+        . '<textarea class="form-control mb-2" id="oe' . $sfx . '" name="emails" rows="2"></textarea>'
+        . totp_input('o' . $sfx) . '<button class="btn btn-sm btn-primary" type="submit">' . ($o['id'] !== '' ? 'Speichern' : 'Anlegen') . '</button></form>';
+};
+foreach ($orgs as $n => $o) {
+    echo '<details class="border rounded p-2 mb-2"><summary><strong>' . h($o['name']) . '</strong>'
+        . ($o['emails'] ? ' <span class="badge text-bg-secondary">' . count($o['emails']) . ' Adr.</span>' : ' <span class="badge text-bg-warning">keine Adresse</span>')
+        . '</summary>' . $orgForm($o, 'o' . $n) . delete_form('org_delete', $o['id'], 'o' . $n, 'Eintrag') . '</details>';
+}
+echo '<details class="mt-2"><summary class="small">Neuen Eintrag anlegen</summary>' . $orgForm(['id' => '', 'name' => '', 'phone' => '', 'emails' => []], 'new') . '</details>';
+echo '</div></div>';
+
+/* Infotexte und DSGVO-Referenzen */
+$fvx = fv_texts();
+$refs = dsgvo_refs();
+echo '<div class="card shadow-sm mb-3" id="infotexte"><div class="card-body"><h2 class="h5">Fachverfahren: Infotexte und DSGVO-Referenzen</h2>';
+echo '<p class="small text-body-secondary">Jede Empfängergruppe erhält ihre Mail mit diesem Text vor der Meldung. Für Nutzende sowie Unternehmen und Behörden '
+    . 'lässt er sich je Verfahren überschreiben. Leer = Vorbelegung.</p>';
+echo '<form method="post" action="system.php" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="fv_texts">';
+foreach (SBCM_FV_TEXTS as $k => [$lbl]) {
+    echo '<label class="form-label small" for="fx' . $k . '">Infotext: ' . h($lbl) . '</label>'
+        . '<textarea class="form-control mb-2" id="fx' . $k . '" name="text_' . $k . '" rows="2" maxlength="600">' . h($fvx[$k]) . '</textarea>';
+}
+foreach (SBCM_DSGVO_DEFAULTS as $k => $_) {
+    echo '<label class="form-label small" for="rf' . $k . '">DSGVO-Referenz bei DSB-Stufe "' . h(SBCM_APP_DSB[$k]) . '"</label>'
+        . '<input class="form-control mb-2" id="rf' . $k . '" name="ref_' . $k . '" maxlength="200" value="' . h($refs[$k]) . '">';
+}
+echo totp_input('fx') . '<button class="btn btn-sm btn-primary" type="submit">Speichern</button></form></div></div>';
 
 /* Betreff-Präfixe */
 $pre = mail_prefixes();
