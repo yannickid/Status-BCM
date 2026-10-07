@@ -32,4 +32,5 @@ echo '<p class="small text-body-secondary">' . ($auto
     : 'Automatische Aktualisierung ist aus. <a href="status.php">Seite neu laden</a> · <a href="status.php?auto=1">Wieder einschalten</a>') . '</p>';
 render_flash();
 render_board($board, false);
+render_app_overview($board);
 page_end();

@@ -511,6 +511,52 @@ ob_start();
 render_status_card(['payload' => ['audience' => 'ALLE'] + build_payload(bcm()['by_key']['MAIL_EINGESCHRAENKT'], [])]);
 $card = (string)ob_get_clean();
 ok(strpos($card, 'Für alle:') !== false && strpos($card, 'Für alle:') < strpos($card, 'status-label'), '"Für alle:" steht über dem Status-Titel');
+
+// Fachverfahren
+ok(app_save('', ['name' => ''], 'system:test') !== null && app_save('', ['name' => 'Portal', 'login_url' => 'http://x.example'], 'system:test') !== null
+    && app_save('', ['name' => 'Ausfallportal'], 'system:test') !== null && app_save('', ['name' => 'X', 'short' => '<b>'], 'system:test') !== null,
+    'Fachverfahren: Name Pflicht, nur https-Links, keine kritischen Begriffe, Kürzel geprüft');
+ok(app_save('', ['name' => 'Elektronische Akte', 'short' => 'eAkte', 'login_url' => 'https://akte.example/', 'external' => '1', 'category' => 'Verwaltung',
+    'dsb' => 'sehr_hoch', 'vsa' => '1', 'kritis' => '1', 'partners' => 'Landesamt X', 'roles' => ['technik' => ['it', 'gibtsnicht'], 'partner' => ['boa-krisenstab']]], 'system:test') === null
+    && app_save('', ['name' => 'Elektronische Akte'], 'system:test') !== null, 'Fachverfahren angelegt, gleicher Name abgelehnt');
+$fa = apps_by_id()['eakte'] ?? [];
+ok(($fa['roles']['technik'] ?? null) === ['it'] && $fa['kritis'] && $fa['dsb'] === 'sehr_hoch' && app_flags($fa) === ['DSB: sehr hoch', 'VSA', 'KRITIS', 'Partner: Landesamt X'],
+    'Fachverfahren: nur bekannte Kreise, Einstufung');
+ok(!str_contains((string)kv_get('set:apps'), 'Akte') && !str_contains((string)kv_get('set:apps'), 'Landesamt'), 'Fachverfahren verschlüsselt gespeichert');
+ok(app_role_circles(['eakte'], ['technik']) === ['it'] && app_role_circles(['eakte'], SBCM_APP_ROLES_DEFAULT) === ['it']
+    && app_role_circles(['eakte'], ['partner']) === ['boa-krisenstab'], 'Alarmkreise je Rolle, Partner nur auf Wunsch');
+[$fs, $fe] = parse_change_request(['mode' => 'set', 'status_key' => 'FV_NICHT_VERFUEGBAR', 'validity_type' => 'duration', 'duration' => 60], null);
+ok($fs === null && in_array('Bitte mindestens ein Fachverfahren auswählen.', $fe, true), 'Meldung zum Fachverfahren verlangt ein Verfahren');
+[$fs] = parse_change_request(['mode' => 'set', 'status_key' => 'FV_NICHT_VERFUEGBAR', 'app' => ['eakte', 'fremd'], 'validity_type' => 'duration', 'duration' => 60,
+    'alarm_mail' => '1', 'circles' => [], 'app_role' => ['technik'], 'notify_loc' => '1'], null);
+ok($fs && $fs['app_ids'] === ['eakte'] && $fs['circles'] === ['it'] && $fs['notify_locations'] === false && spec_needs_totp($fs),
+    'Fachverfahren: Kreise der Rolle, keine Standortverwaltungen, TOTP');
+$fr = status_create($fs, 'anna');
+ok(($fr['payload']['apps'][0] ?? []) === ['id' => 'eakte', 'name' => 'Elektronische Akte', 'short' => 'eAkte', 'login_url' => 'https://akte.example/', 'help_url' => '']
+    && $fr['payload']['public_label'] === 'Nicht verfügbar' && !str_contains(json_encode($fr['payload']), 'KRITIS') && !str_contains(json_encode($fr['payload']), 'Landesamt'),
+    'Meldung speichert nur Name, Kürzel, Links und die externe Fassung, keine Einstufung');
+ok(!status_for_all($fr['payload']) && str_contains(mail_vars_status($fr['payload'], null)['locations'], '- Elektronische Akte (eAkte)'), 'Kein "Für alle", Verfahren in der ALARM-Mail');
+$fb = status_board();
+ok(isset(app_states($fb)['eakte']) && isset(app_states($fb, true)['eakte']), 'Zustand je Verfahren aus den gültigen Meldungen');
+$fb2 = $fb;
+foreach ($fb2['live'] as &$fl) { $fl['payload']['exercise'] = true; } unset($fl);
+ok(!isset(app_states($fb2, true)['eakte']) && isset(app_states($fb2)['eakte']), 'Übungen erscheinen nicht extern');
+$fb2 = $fb;
+foreach ($fb2['live'] as &$fl) { $fl['mac_ok'] = false; } unset($fl);
+ok(!app_states($fb2, true), 'Nicht verifizierte Meldungen erscheinen nicht');
+status_end((int)$fr['id'], 'anna');
+ok(public_page_set(['enabled' => '1', 'title' => ''], 'system:test') !== null && public_page_set(['title' => 'T', 'email' => 'x'], 'system:test') !== null
+    && public_page_set(['title' => 'T', 'ticket_url' => 'http://t.example'], 'system:test') !== null && public_page_set(['title' => 'Kein Ausfall'], 'system:test') !== null,
+    'Externe Seite: Titel Pflicht, E-Mail und https geprüft, keine kritischen Begriffe');
+ok(public_page_set(['enabled' => '1', 'title' => 'Status', 'email' => 'SD@ziel.example'], 'system:test') === null && public_page()['enabled'] && public_page()['email'] === 'sd@ziel.example'
+    && !str_contains((string)kv_get('set:public_page'), 'ziel.example'), 'Externe Seite gespeichert, Kontakt verschlüsselt');
+$tok = public_reveal_token(time() - 10);
+ok(public_reveal_ok($tok) && !public_reveal_ok(public_reveal_token()) && !public_reveal_ok(public_reveal_token(time() - 4000))
+    && !public_reveal_ok(substr($tok, 0, -1) . 'x') && !public_reveal_ok('x'), 'Kontakt-Token: frühestens nach 2 Sekunden, höchstens 30 Minuten, nicht fälschbar');
+$jv = json_decode((string)file_get_contents(__DIR__ . '/../config.json'), true);
+$jv['statuses'][] = ['key' => 'FV_TEST', 'label' => 'x', 'severity' => 'warn', 'audience' => 'FACHVERFAHREN', 'text' => 'x.', 'public_label' => str_repeat('x', 41)];
+ok(bcm_validate($jv) === ['FV_TEST: public_label > 40 oder public_text > 300 Zeichen'] && !bcm_lint(bcm()), 'config.json: Zielgruppe FACHVERFAHREN, externe Fassung geprüft');
+ok(app_delete('eakte', 'system:test') === null && !apps_all(), 'Fachverfahren gelöscht');
 $raw = kv_get('set:cc1');
 ok(!str_contains((string)$raw, 'test.example') && !setting_broken('circles'), 'Einstellungen verschlüsselt gespeichert');
 kv_set('set:circles', (string)kv_get('set:cc1'));

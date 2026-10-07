@@ -114,6 +114,14 @@ Tageswerte der letzten 30 Tage zeigt Admins die Seite **System**.
 der Integritätsprüfung. "FEHLER" bedeutet: Das Protokoll wurde verändert. In diesem Fall sofort die ISB informieren.
 Das vollständige Protokoll exportieren Admins unter **System → Protokoll-Export** (siehe unten).
 
+### Fachverfahren
+
+Status mit dem Zusatz "Fachverfahren" (Geplante Wartung, eingeschränkt nutzbar, nicht verfügbar) wählen, die betroffenen
+Verfahren ankreuzen und bei ALARM-Mail die Rollen wählen (Partner sind nicht vorausgewählt). Die Vorschau zeigt Hinweise
+aus der Einstufung (z. B. KRITIS-Meldepflichten, Partner) und was extern erscheint. Auf der Statusseite steht unter den
+Meldungen die Übersicht **Fachverfahren**. Pflege der Verfahren und der externen Seite: Menü **Fachverfahren** (Admins).
+Details: [Fachverfahren](08-fachverfahren.md).
+
 ### Aushang drucken
 
 **Einstellungen → Aushang mit QR-Code drucken** (bzw. **System**) erzeugt eine A4-Seite für Schwarze Bretter und den

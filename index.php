@@ -104,5 +104,9 @@ echo '<label class="form-label" for="pw">Passwort</label>';
 echo '<input class="form-control form-control-lg mb-3" id="pw" type="password" name="password" autocomplete="current-password" required>';
 echo '<div class="hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>';
 echo '<div class="d-grid"><button class="btn btn-primary btn-lg" type="submit">Anmelden</button></div>';
-echo '</form></div></div></div></div>';
+echo '</form></div></div>';
+if (is_installed() && public_page()['enabled']) {
+    echo '<p class="small mt-3"><a href="extern.php">' . h(public_page()['title']) . '</a> (ohne Anmeldung)</p>';
+}
+echo '</div></div>';
 page_end();

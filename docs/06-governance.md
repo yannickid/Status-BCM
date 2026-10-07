@@ -216,6 +216,7 @@ Maßnahmen aus 05 und der Realisierungsplan (4.1) umgesetzt sind.
 | R13 | G 0.29 Verstoß gegen Gesetze; G 0.38 Missbrauch personenbezogener Daten | Datenschutzverstoß (Löschfristen, Drittland Signal, Mitbestimmung) | mittel | Abschnitt 7; IP-Adressen im Export nur auf Wahl | gering | reduzieren |
 | R14 | G 0.37 Abstreiten von Handlungen | "Ich habe die Meldung nicht gesetzt" | mittel | persönliche Kennung mit TOTP, Protokoll mit IP und Browser, Hash-Kette | gering | reduzieren |
 | R15 | zusätzlich: Weitergabe des gemeinsamen Zugangs | Unbefugte lesen die Statusseite | häufig × vernachlässigbar = gering | Inhalte pressetauglich, Wechsel des Passworts | gering | akzeptieren |
+| R16 | G 0.19 Offenlegung schützenswerter Informationen; G 0.14 Ausspähen von Informationen | Externe Statusseite oder Einstufung der Fachverfahren (KRITIS, VSA) dient Angreifern als Lagebild bzw. Zielliste | mittel | Externe Seite standardmäßig aus, nur gewählte Verfahren, allgemeine Texte ohne Ursachen; Einstufung verschlüsselt, nur mit persönlicher Kennung sichtbar, nie extern, nicht in Mails | gering | reduzieren |
 
 ### 5.3 Ergebnis
 

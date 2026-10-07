@@ -154,6 +154,46 @@
       "require_validity": true,
       "allow_unlimited": false,
       "require_totp": true
+    },
+    {
+      "key": "FV_WARTUNG",
+      "label": "Geplante Wartung",
+      "severity": "info",
+      "audience": "FACHVERFAHREN",
+      "text": "Die genannten Fachverfahren werden planmäßig gewartet und sind in diesem Zeitraum nicht oder nur eingeschränkt nutzbar.",
+      "public_label": "Wartung",
+      "public_text": "Geplante Wartung: Einzelne Anwendungen sind vorübergehend nicht oder nur eingeschränkt nutzbar.",
+      "alarm_mail_allowed": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": false
+    },
+    {
+      "key": "FV_EINGESCHRAENKT",
+      "label": "Fachverfahren eingeschränkt nutzbar",
+      "severity": "warn",
+      "audience": "FACHVERFAHREN",
+      "text": "Die genannten Fachverfahren sind derzeit nur eingeschränkt nutzbar. Bitte rechnen Sie mit Verzögerungen. Die zuständigen Stellen arbeiten daran.",
+      "public_label": "Eingeschränkt nutzbar",
+      "public_text": "Einzelne Anwendungen sind derzeit nur eingeschränkt nutzbar. Wir arbeiten daran.",
+      "alarm_mail_allowed": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
+    },
+    {
+      "key": "FV_NICHT_VERFUEGBAR",
+      "label": "Fachverfahren nicht verfügbar",
+      "severity": "critical",
+      "audience": "FACHVERFAHREN",
+      "text": "Die genannten Fachverfahren sind derzeit nicht nutzbar. Bitte nutzen Sie die vereinbarten Ersatzverfahren und bei Rückfragen die angegebene Rufnummer.",
+      "public_label": "Nicht verfügbar",
+      "public_text": "Einzelne Anwendungen sind derzeit nicht verfügbar. Wir arbeiten an der Wiederherstellung.",
+      "alarm_mail_allowed": true,
+      "alarm_mail_default": true,
+      "require_validity": true,
+      "allow_unlimited": false,
+      "require_totp": true
     }
   ],
 

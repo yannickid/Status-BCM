@@ -81,3 +81,6 @@ summary{cursor:pointer}
 @keyframes sbcm-on{0%,100%{visibility:visible}}
 @keyframes sbcm-off{0%,100%{visibility:hidden}}
 @media print{.session-frame{display:none}}
+/* Fachverfahren: Übersicht intern und extern; Farbleiste wie bei den Meldungen, Zustand steht immer auch als Text daneben */
+.app-row{border-left:.35rem solid var(--sev,var(--bs-border-color))}
+.app-row.app-ok{--sev:var(--bs-success)}

@@ -77,7 +77,8 @@ Geheimnisse können überall als `enc:v1:…` stehen (erzeugt mit `php setup.php
 | `label` | ja | Überschrift, max. 60 Zeichen |
 | `text` | ja | Meldungstext, max. 500 Zeichen (Prüfung warnt ab 320) |
 | `severity` | ja | `ok`, `info`, `warn`, `critical` (Farbe und Etikett) |
-| `audience` | ja | `ALLE` oder `ALLE_UND_ADRESSLISTE` (mit Auswahl betroffener Standorte samt Durchwahl) |
+| `audience` | ja | `ALLE`, `ALLE_UND_ADRESSLISTE` (mit Auswahl betroffener Standorte samt Durchwahl) oder `FACHVERFAHREN` (mit Auswahl betroffener [Fachverfahren](08-fachverfahren.md)) |
+| `public_label` / `public_text` | nein | nur bei `FACHVERFAHREN`: allgemeinere Fassung für die externe Seite (max. 40 / 300 Zeichen); ohne Angabe gelten `label` und `text`. Bitte immer angeben und ohne Ursachen formulieren |
 | `phone` | nein | eigene Rückrufnummer für diesen Status, ersetzt `default_phone` |
 | `exercise` | nein | `true` = als **ÜBUNG** kennzeichnen (Seite und Mail) |
 | `alarm_mail_allowed` | nein | ALARM-Mail möglich (Standard: alles außer `ok`) |
