@@ -143,6 +143,24 @@ if ($method === 'POST') {
                     flash('err', $e->getMessage());
                     redirect('change.php');
                 }
+                if (!empty($res['payload']['apps'])) {
+                    // Fachverfahren: Pflicht-Mails an alle hinterlegten Stellen, unabhängig von der ALARM-Mail
+                    $kind = ['set' => 'new', 'extend' => 'update', 'update' => 'update', 'end' => 'end'][$spec['mode']];
+                    try {
+                        $m = send_app_notices($kind, (int)$res['id'], $res['payload'], $res['valid_until'], $user['id']);
+                        if ($m['failed'] > 0) {
+                            flash('warn', 'Benachrichtigung Fachverfahren: ' . $m['ok'] . ' von ' . $m['total'] . ' Adressen zugestellt – Details im Protokoll.');
+                        } else {
+                            flash('ok', 'Benachrichtigung Fachverfahren an ' . $m['ok'] . ' Adressen versendet.');
+                        }
+                        if ($m['missing']) {
+                            flash('warn', 'Keine Zieladresse hinterlegt für: ' . implode(', ', $m['missing']) . ' (System → Fachverfahren).');
+                        }
+                    } catch (Throwable $e) {
+                        error_log('Status-BCM: Benachrichtigung Fachverfahren: ' . $e->getMessage());
+                        flash('err', 'Die Meldung wurde gespeichert, die Benachrichtigung zum Fachverfahren konnte NICHT versendet werden.');
+                    }
+                }
                 if (!empty($spec['alarm_mail'])) {
                     $kind = ['set' => 'new', 'extend' => 'update', 'update' => 'update', 'end' => 'end'][$spec['mode']];
                     try {
@@ -339,7 +357,8 @@ function form_alarm(array $old, string $sfx, string $label, bool $apps = true): 
     }
     if ($apps && apps_all()) {
         $roles = array_key_exists('alarm_mail', $old) ? array_map('strval', (array)($old['app_role'] ?? [])) : SBCM_APP_ROLES_DEFAULT;
-        $h .= '<div class="small text-body-secondary mt-2 mb-1">Bei Fachverfahren zusätzlich die Kreise dieser Rollen:</div><div class="d-flex flex-wrap gap-3">';
+        $h .= '<div class="small text-body-secondary mt-2 mb-1">Bei Fachverfahren zusätzlich die Kreise dieser Rollen alarmieren (Signal, GroupAlarm; '
+            . 'die E-Mail erhalten sie ohnehin als Pflicht-Benachrichtigung):</div><div class="d-flex flex-wrap gap-3">';
         foreach (SBCM_APP_ROLES as $r => $rl) {
             $h .= '<div class="form-check"><input class="form-check-input" type="checkbox" id="ar' . $sfx . $r . '" name="app_role[]" value="' . h($r) . '"'
                 . (in_array($r, $roles, true) ? ' checked' : '') . '><label class="form-check-label" for="ar' . $sfx . $r . '">' . h($rl) . '</label></div>';
@@ -382,7 +401,7 @@ if (is_array($pending) && ($pending['user'] ?? '') === $user['id'] && time() - (
         render_status_card(['payload' => $payload, 'created_at' => now_utc(), 'valid_until' => $spec['valid_until'],
             'mac_ok' => true, 'author' => $user['id'], 'alarm_mail' => $spec['alarm_mail'] ? 1 : 0], true);
     }
-    // Fachverfahren: Hinweise aus der internen Einstufung (Meldepflichten, Partner) und Wirkung auf der externen Seite
+    // Fachverfahren: Hinweise aus der internen Einstufung (Meldepflichten, DSGVO-Referenz) und Wirkung auf der externen Seite
     $selApps = array_values(array_filter(apps_all(), fn($a) => in_array($a['id'], (array)($spec['app_ids'] ?? []), true)));
     $appNotes = [];
     foreach ($selApps as $a) {
@@ -393,11 +412,8 @@ if (is_array($pending) && ($pending['user'] ?? '') === $user['id'] && time() - (
         if ($a['vsa']) {
             $n[] = 'VSA: Geheimschutzbeauftragte informieren';
         }
-        if (in_array($a['dsb'], ['hoch', 'sehr_hoch'], true)) {
-            $n[] = 'DSB-Sensibilität ' . SBCM_APP_DSB[$a['dsb']] . ': Datenschutz einbinden, falls personenbezogene Daten betroffen sein könnten';
-        }
-        if ($a['partners'] !== '') {
-            $n[] = 'Partner mitinformieren: ' . $a['partners'];
+        if ($a['dsb'] !== '') {
+            $n[] = 'DSB-Sensibilität ' . SBCM_APP_DSB[$a['dsb']] . ': ' . dsgvo_refs()[$a['dsb']];
         }
         if ($n) {
             $appNotes[] = '<li><strong>' . h($a['name']) . ':</strong> ' . h(implode('; ', $n)) . '</li>';
@@ -407,8 +423,21 @@ if (is_array($pending) && ($pending['user'] ?? '') === $user['id'] && time() - (
         echo '<div class="alert alert-info"><strong>Hinweise zu den Fachverfahren (nur intern)</strong><ul class="mb-0">' . implode('', $appNotes) . '</ul></div>';
     }
     $ext = array_filter($selApps, fn($a) => $a['external']);
+    if ($selApps) {
+        $kind = ['set' => 'new', 'extend' => 'update', 'update' => 'update', 'end' => 'end'][$spec['mode']];
+        $plan = app_notice_plan($kind, $payload, $spec['valid_until']);
+        echo '<div class="alert alert-warning"><strong>Benachrichtigung zu den Fachverfahren wird versendet</strong> (Pflicht, je Gruppe eine eigene Mail mit Infotext, Empfänger per BCC):<ul class="mb-0">';
+        foreach ($plan as $p) {
+            echo '<li>' . h($p['title']) . ': ' . ($p['missing'] ? '<strong>keine Zieladresse hinterlegt</strong> (System → Fachverfahren)'
+                : (count($p['emails']) ? (int)count($p['emails']) . ' Adresse(n)' : 'keine Adressen hinterlegt')) . '</li>';
+        }
+        if (!empty($payload['exercise'])) {
+            echo '<li>Übung: Unternehmen und Behörden werden nicht benachrichtigt.</li>';
+        }
+        echo '</ul></div>';
+    }
     if ($ext && public_page()['enabled'] && $spec['mode'] !== 'end') {
-        echo '<p class="small text-body-secondary">Auf der externen Statusseite erscheint für ' . h(implode(', ', array_column($ext, 'name'))) . ' nur: "'
+        echo '<p class="small text-body-secondary">Auf der externen Statusseite erscheint für ' . h(implode(', ', array_map('app_public_name', $ext))) . ' nur: "'
             . h((string)($payload['public_label'] ?? '')) . '" mit dem Text "' . h((string)($payload['public_text'] ?? '')) . '"' . (!empty($payload['exercise']) ? ' (Übungen nicht)' : '') . '.</p>';
     }
     if ($spec['alarm_mail']) {

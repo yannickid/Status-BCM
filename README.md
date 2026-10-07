@@ -37,8 +37,10 @@ erreichbar, wenn Netzwerk, Telefon oder Mail im Haus gestört sind.
   Uptime-Check.
 * **Aushang:** druckbare A4-Seite mit QR-Code zur Statusseite für Schwarzes Brett und Notfallordner.
 * **Fachverfahren:** Status je Anwendung mit Name, Kürzel, Login- und Hilfe-Link; intern nach Anmeldung (optional auch
-  "Verfügbar"), extern ohne Login nur mit allgemeinen Texten und geschützten Kontaktdaten. Alarmierung über Kreise je
-  Rolle (Verantwortlich, Technik, Betrieb, Nutzende, Partner); Einstufung (DSB, VSA, KRITIS, Partner) nur intern.
+  "Verfügbar"), öffentlich auf der Startseite und unter `extern.php` nur mit freigegebenen Feldern, allgemeinen Texten
+  und geschützten Kontaktdaten. Jede Meldung benachrichtigt automatisch Verantwortliche, Technik, Betrieb, Nutzende,
+  Unternehmen und Behörden (Adressbuch), Informationssicherheit, VSA und Datenschutz (mit DSGVO-Referenz), je Gruppe
+  mit eigenem Infotext; Einstufung (DSB, VSA, KRITIS) nur intern.
 * **Protokoll-Export** als CSV und barrierefreies PDF (PDF/UA-1) für Revision und ISB, mit Integritätsprüfung und Kopf-Hash.
 * **Revisionssicheres Protokoll:** wer, was, wann, wie; Hash-Kette mit HMAC, append-only per DB-Trigger, täglicher
   Audit-Anker per Mail.
@@ -89,7 +91,7 @@ Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-install
 | `system.php` | System (nur Admins): Prüfung, Cron-Adresse, Alarmkreise mit Signal/GroupAlarm, Standorte mit E-Mail der Standortverwaltung, Kontakte, Betreff-Präfixe, An-Feld, Empfänger je Stufe, Standard-Rufnummer, Kopie-Adresse, Zugangspasswort, Protokoll-Export, Testmail |
 | `aushang.php` | druckbarer Aushang mit QR-Code (persönliche Anmeldung) |
 | `verfahren.php` | Fachverfahren und externe Statusseite pflegen (nur Admins) |
-| `extern.php` | externe Statusseite der Fachverfahren ohne Login (standardmäßig aus) |
+| `extern.php` | öffentliche Statusansicht der Fachverfahren ohne Login (standardmäßig aus; dieselbe Ansicht steht dann auf der Startseite) |
 | `export.php` | Protokoll-Export CSV/PDF (nur Admins) |
 | `health.php` | Gesundheitsprüfung für externe Uptime-Dienste (200 `ok` / 503) |
 | `pdf.inc.php` | PDF-Schreiber für den Export (ohne Bibliotheken), getaggt nach PDF/UA-1 mit eingebetteter Schrift (`assets/fonts`, Liberation Sans, SIL OFL) |

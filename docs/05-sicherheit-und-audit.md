@@ -59,7 +59,8 @@ flowchart LR
   L -- HTTPS + Token --> G[GroupAlarm] --> E
   K[Cron CLI oder URL+Token] --> L
   U[externer Uptime-Check] -- HTTPS --> H[health.php] --> L
-  O[Öffentlichkeit] -- HTTPS, ohne Login, ohne Cookie --> X[extern.php<br>nur extern sichtbare Fachverfahren] --> L
+  O[Öffentlichkeit] -- HTTPS, ohne Login --> X[index.php, extern.php<br>nur freigegebene Felder extern sichtbarer Fachverfahren] --> L
+  M -- BCC, Pflicht-Mails Fachverfahren --> Z[Unternehmen und Behörden,<br>Informationssicherheit, VSA, Datenschutz]
   F[config.local.inc.php<br>Master-Key, Hashes] -. nur lesend .-> L
   J[config.json<br>freigegebene Texte] -. nur lesend .-> L
 ```
@@ -150,7 +151,7 @@ nicht mehr lesbar. Ein Schlüsselwechsel ist nur bei einer Neuinstallation vorge
 | Anmeldung Stufe 1 / Stufe 2 / Abmeldung | `login1.ok`, `login2.ok`, `logout` |
 | Fehlgeschlagene Anmeldung Stufe 2, ungültiger TOTP-Code | `login2.fail`, `totp.fail` |
 | Meldung gesetzt / verlängert / geändert / beendet / automatisch beendet | `status.set`, `status.extend`, `status.update`, `status.end`, `status.auto_end` (Meldungsnummer, vorher → nachher, Standorte, Kontakte, Gültigkeit, ALARM ja/nein, TOTP ja/nein, interne Notiz) |
-| Mails | `mail.alarm` (Art neu/Aktualisierung/Ende, gewählte Kreise, Anzahl Standortadressen), `mail.reminder`, `mail.autorevert`, `mail.pw_reminder`, `mail.anchor` (nur Anzahl erfolgreich/fehlgeschlagen) |
+| Mails | `mail.alarm` (Art neu/Aktualisierung/Ende, gewählte Kreise, Anzahl Standortadressen), `mail.app_notice` (Pflicht-Mails zu Fachverfahren: Gruppen mit Zahl der Adressen, fehlende Zieladressen), `mail.reminder`, `mail.autorevert`, `mail.pw_reminder`, `mail.anchor` (nur Anzahl erfolgreich/fehlgeschlagen) |
 | Benutzerverwaltung | `user.create`, `user.reset_pw`, `user.set_pw`, `user.reset_totp`, `user.set_totp`, `user.role`, `user.disable`, `user.enable` |
 | Einrichtung und System | `system.install`, `setting.stage1`, `setting.cc1`, `setting.alarm_to`, `setting.level_cc` (mit Stufe), `setting.default_phone`, `setting.circle_create/update/delete`, `setting.circle_channels`, `setting.location_create/update/delete`, `setting.contact_create/update/delete`, `setting.mail_prefix`, `setting.app_create/update/delete`, `setting.public_page` (Adressen und Nummern nur maskiert), `system.cron_manual`, `mail.test` |
 | Weitere Kanäle | `channel.alarm` (Art, je Kanal Anzahl erfolgreich/fehlgeschlagen, keine Nummern) |
@@ -351,7 +352,7 @@ auf).
 | `audit` | Änderungsprotokoll | Nr., Zeit, Akteur-Kennung, Stufe, Aktion, Objekt | **verschlüsselt:** Details (vorher/nachher, IP, Browser, Notiz, maskierte Adressen); **HMAC-Hash-Kette** | nie (Trigger verhindert `UPDATE`/`DELETE`); Frist im Löschkonzept |
 | `mail_log` | versendete Mails | Zeit, Art, Anzahl Empfänger/zugestellt | **verschlüsselt:** Betreff, Text, Zustellergebnis mit **maskierten** Adressen | derzeit keine automatische Löschung |
 | `account` | Redaktion und Admins | Kennung, Anzeigename, Rolle, aktiv, Passwortdaten (Datum) | **bcrypt:** Passwort; **verschlüsselt:** E-Mail, TOTP-Secret; **MAC** über die Zeile | nie gelöscht, nur deaktiviert |
-| `kv` | im Browser gepflegte Einstellungen | Schlüsselnamen; Zeitpunkt letzter Cron-Lauf und letzte Warnmail | **verschlüsselt:** Alarmkreise (Mail-Adressen, Signal-Nummern, GroupAlarm-Szenario), Standorte mit Adressen der Standortverwaltung, Kontakte, Präfixe, Kopie-Adresse, Adresse im An-Feld, zusätzliche Empfänger je Stufe, Standard-Rufnummer, Fachverfahren mit Einstufung (DSB, VSA, KRITIS, Partner) und Kreisen je Rolle, Einstellungen und Kontaktdaten der externen Seite, Benutzername und Passwort-Hash (bcrypt) des gemeinsamen Zugangs | beim Entfernen unter **System** bzw. **Fachverfahren** |
+| `kv` | im Browser gepflegte Einstellungen | Schlüsselnamen; Zeitpunkt letzter Cron-Lauf und letzte Warnmail | **verschlüsselt:** Alarmkreise (Mail-Adressen, Signal-Nummern, GroupAlarm-Szenario), Standorte mit Adressen der Standortverwaltung, Kontakte, Präfixe, Kopie-Adresse, Adresse im An-Feld, zusätzliche Empfänger je Stufe, Standard-Rufnummer, Fachverfahren mit Einstufung (DSB, VSA, KRITIS), Kreisen je Rolle, Infotexten und zugeordneten Unternehmen/Behörden, Adressbuch Unternehmen und Behörden, Zieladressen (Informationssicherheit, VSA, Datenschutz), Infotexte und DSGVO-Referenzen, Einstellungen und Kontaktdaten der externen Seite, Benutzername und Passwort-Hash (bcrypt) des gemeinsamen Zugangs | beim Entfernen unter **System** bzw. **Fachverfahren** |
 | `login_attempt` | Fehlversuche (Brute-Force-Schutz) | Zeit, Bereich, ok ja/nein | IP und Benutzer nur als **HMAC-Pseudonym** | automatisch nach 2 Tagen |
 | `totp_used` | verbrauchte TOTP-Zeitschritte (Replay-Schutz) | Kennung, Zeitschritt | – (kein Geheimnis) | automatisch nach etwa 1 Stunde |
 | `view_count` | Lesezähler | Meldungs-ID, Tag, Anzahl | – (keine IP, keine Person) | derzeit keine automatische Löschung |
@@ -378,14 +379,16 @@ auf).
 | Protokoll-Export | Gerät des Admins (Download) | Protokoll im Klartext, IP nur wenn gewählt | Download nur für Admins mit TOTP-Login, jeder Export wird protokolliert | **Datei liegt danach ungeschützt beim Admin:** verschlüsselt ablegen, zweckgebunden weitergeben, nach Zweck löschen |
 | Aushang | Papier | Adresse, QR-Code, optional Benutzername des gemeinsamen Zugangs und Notfallnummern | Passwort wird nie gedruckt | Benutzername öffentlich: das Passwort bleibt der eigentliche Schutz |
 | `health.php` | externer Uptime-Dienst | nur `ok`, `db` oder `cron` | optional Token | verrät nur Verfügbarkeit |
-| `extern.php` (wenn eingeschaltet) | Öffentlichkeit | Name/Kürzel extern sichtbarer Fachverfahren, allgemeine Statusfassung, "Stand"; Kontaktdaten erst nach Klick | keine Sitzung, kein Cookie, `noindex`, Kontaktdaten nicht im Quelltext (signiertes Token, Honeypot) | zeigt, welche externen Anwendungen gerade eingeschränkt sind (siehe [Fachverfahren → Risiken](08-fachverfahren.md#risiken)) |
+| `extern.php` und Startseite (wenn eingeschaltet) | Öffentlichkeit | freigegebene Felder (Name, Kürzel, Links) extern sichtbarer Fachverfahren, allgemeine Statusfassung, "Stand"; Kontaktdaten erst nach Klick | keine Sitzung, kein Cookie, `noindex`, Kontaktdaten nicht im Quelltext (signiertes Token, Honeypot) | zeigt, welche externen Anwendungen gerade eingeschränkt sind (siehe [Fachverfahren → Risiken](08-fachverfahren.md#risiken)) |
 
 ### 11.4 Wer was lesen kann
 
 | Wer | kann lesen | kann nicht |
 |---|---|---|
-| Öffentlichkeit (ohne Login, nur wenn eingeschaltet) | extern sichtbare Fachverfahren mit allgemeiner Statusfassung, Kontaktdaten nach Klick | alles andere |
-| Beschäftigte (gemeinsamer Zugang) | geltende und 48 h alte Meldungen, Fachverfahren mit Links, Kategorie und Bereich | Protokoll, Adressen, Notizen, Einstufung der Fachverfahren (DSB, VSA, KRITIS, Partner) |
+| Öffentlichkeit (ohne Login, nur wenn eingeschaltet) | extern sichtbare Fachverfahren (nur freigegebene Felder) mit allgemeiner Statusfassung, Kontaktdaten nach Klick | alles andere |
+| Unternehmen und Behörden (per Mail) | allgemeine Statusfassung der ihnen zugeordneten Verfahren, Infotext, öffentlicher Kontakt | interne Texte, Einstufung, Übungen, andere Empfänger (BCC) |
+| Informationssicherheit, VSA, Datenschutz (per Mail) | Meldung mit interner Einstufung der betroffenen Verfahren, DSGVO-Referenz | andere Empfänger (BCC) |
+| Beschäftigte (gemeinsamer Zugang) | geltende und 48 h alte Meldungen, Fachverfahren mit Links, Kategorie und Bereich | Protokoll, Adressen, Notizen, Einstufung der Fachverfahren (DSB, VSA, KRITIS, Unternehmen und Behörden) |
 | Redaktion (Kennung + Passwort + TOTP) | zusätzlich Verlauf, Protokoll (mit IP und Notizen), Nutzung, Aushang | Adressen im Klartext, Export |
 | Admin | zusätzlich Benutzer, System (Adressen und Nummern nur maskiert), Export | Passwörter, TOTP-Secrets, Adressen im Klartext |
 | Hoster / DB-Administration ohne Datei-Zugriff | Klartextspalten aus 11.1 (wer hat wann welchen Status gesetzt) | verschlüsselte Inhalte; unbemerkt fälschen |

@@ -1,8 +1,8 @@
 <?php
 /**
  * Fachverfahren / Unternehmensanwendungen und externe Statusseite – nur Login Stufe 2 mit Rolle "admin".
- * Je Verfahren: Name, Kürzel, Links, Sichtbarkeit, interne Einstufung (Kategorie, Bereich, DSB, VSA, KRITIS, Partner)
- * und Alarmkreise je Rolle. Jede Änderung verlangt den TOTP-Code des Admins und wird im Audit-Log protokolliert.
+ * Je Verfahren: Name, Kürzel, Links, Sichtbarkeit (auch je Feld extern), interne Einstufung (Kategorie, Bereich, DSB, VSA, KRITIS),
+ * Unternehmen und Behörden aus dem Adressbuch, Infotexte und Alarmkreise je Rolle. Jede Änderung verlangt den TOTP-Code des Admins und wird im Audit-Log protokolliert.
  */
 declare(strict_types=1);
 define('SBCM', true);
@@ -67,7 +67,12 @@ function app_fields(array $a, string $sfx): string
     $o .= '<fieldset class="mb-2"><legend class="small fw-semibold mb-1">Sichtbarkeit</legend>'
         . $cb('green_int', 'Intern auch "Verfügbar" anzeigen', 'sonst nur bei Einschränkung')
         . $cb('external', 'Auf der externen Statusseite zeigen', 'ohne Login, nur allgemeine Texte')
-        . $cb('green_ext', 'Extern auch "Verfügbar" anzeigen') . '</fieldset>';
+        . $cb('green_ext', 'Extern auch "Verfügbar" anzeigen') . '</fieldset>'
+        . '<fieldset class="mb-2"><legend class="small fw-semibold mb-1">Extern sichtbar</legend><div class="d-flex flex-wrap gap-3">';
+    foreach (SBCM_APP_EXT as $k => $label) {
+        $o .= $cb($k, $label);
+    }
+    $o .= '</div><p class="small text-body-secondary mb-0">Name oder Kürzel muss extern sichtbar sein.</p></fieldset>';
     $o .= '<fieldset class="mb-2 border rounded p-2"><legend class="small fw-semibold mb-1 float-none w-auto px-1">Nur intern (nie extern)</legend>'
         . $in('category', 'Kategorie', 60) . $in('area', 'Bereich', 60)
         . '<label class="form-label small" for="dsb' . $sfx . '">Datenschutz: Sensibilität der Daten (DSB)</label><select class="form-select mb-2" id="dsb' . $sfx . '" name="dsb">';
@@ -75,8 +80,27 @@ function app_fields(array $a, string $sfx): string
         $o .= '<option value="' . h($k) . '"' . ((string)($a['dsb'] ?? '') === $k ? ' selected' : '') . '>' . h($label) . '</option>';
     }
     $o .= '</select>' . $cb('vsa', 'VSA (Verschlusssachen)') . $cb('kritis', 'KRITIS (kritische Infrastruktur)')
-        . $in('partners', 'Weitere Partner', 300, 'text', 'Behörden, Unternehmen; zum Mitinformieren')
-        . '<p class="small text-body-secondary mb-0">Kategorie und Bereich sehen alle Angemeldeten. DSB, VSA, KRITIS und Partner sehen nur Personen mit persönlicher Kennung.</p></fieldset>';
+        . '<p class="small text-body-secondary mb-0">Kategorie und Bereich sehen alle Angemeldeten. DSB, VSA, KRITIS sowie Unternehmen und Behörden '
+        . 'sehen nur Personen mit persönlicher Kennung.</p></fieldset>';
+    $orgs = orgs_all();
+    $sel = array_map('strval', (array)($a['orgs'] ?? []));
+    $o .= '<fieldset class="mb-2 border rounded p-2"><legend class="small fw-semibold mb-1 float-none w-auto px-1">Unternehmen und Behörden informieren</legend>';
+    if (!$orgs) {
+        $o .= '<p class="small text-body-secondary mb-0">Noch keine Einträge. Bitte zuerst unter <a href="system.php#adressbuch">System</a> im Adressbuch anlegen.</p>';
+    }
+    foreach ($orgs as $i => $org) {
+        $id = 'o' . $sfx . '_' . (int)$i;
+        $o .= '<div class="form-check"><input class="form-check-input" type="checkbox" name="orgs[]" value="' . h($org['id']) . '" id="' . $id . '"'
+            . (in_array($org['id'], $sel, true) ? ' checked' : '') . '><label class="form-check-label" for="' . $id . '">' . h($org['name'])
+            . ' <span class="text-body-secondary small">(' . count($org['emails']) . ' Adr.)</span></label></div>';
+    }
+    $o .= '<p class="small text-body-secondary mb-0">Sie erhalten bei jeder Meldung zu diesem Verfahren automatisch die allgemeine Fassung (keine Übungen).</p></fieldset>';
+    $ta = fn(string $k, string $label, string $hint) => '<label class="form-label small" for="' . $k . $sfx . '">' . $label
+        . ' <span class="text-body-secondary">(' . $hint . ')</span></label><textarea class="form-control mb-2" id="' . $k . $sfx . '" name="' . $k
+        . '" rows="2" maxlength="600">' . $v($k) . '</textarea>';
+    $o .= '<fieldset class="mb-2 border rounded p-2"><legend class="small fw-semibold mb-1 float-none w-auto px-1">Infotexte für dieses Verfahren</legend>'
+        . $ta('text_nutzende', 'Infotext für Nutzende', 'optional; leer = Text aus System')
+        . $ta('text_extern', 'Infotext für Unternehmen und Behörden', 'optional; leer = Text aus System') . '</fieldset>';
     $circles = alarm_circles();
     $o .= '<fieldset class="mb-2 border rounded p-2"><legend class="small fw-semibold mb-1 float-none w-auto px-1">Alarmkreise je Rolle</legend>';
     if (!$circles) {
@@ -93,7 +117,7 @@ function app_fields(array $a, string $sfx): string
         $o .= '</div></fieldset>';
     }
     $o .= '<p class="small text-body-secondary mb-0">Die Kreise bringen E-Mail, Signal und GroupAlarm mit (Pflege unter System). '
-        . 'Partner sind beim Alarm nicht vorausgewählt.</p></fieldset>';
+        . 'Bei jeder Meldung erhalten sie automatisch eine E-Mail; Signal und GroupAlarm nur mit ALARM.</p></fieldset>';
     return $o;
 }
 
@@ -131,7 +155,7 @@ foreach ($apps as $i => $a) {
 echo '</div></div>';
 
 /* Neu */
-$vals = $oldAct === 'app_save' && $oldId === '' ? $old : ['green_int' => '1'];
+$vals = $oldAct === 'app_save' && $oldId === '' ? $old : ['green_int' => '1', 'ext_name' => '1'];
 echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Neues Fachverfahren</h2>';
 echo '<form method="post" action="verfahren.php" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="app_save"><input type="hidden" name="id" value="">'
     . app_fields($vals, 'new') . totp_input('new') . '<button class="btn btn-primary" type="submit">Anlegen</button></form></div></div>';

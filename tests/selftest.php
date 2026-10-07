@@ -516,15 +516,34 @@ ok(strpos($card, 'Für alle:') !== false && strpos($card, 'Für alle:') < strpos
 ok(app_save('', ['name' => ''], 'system:test') !== null && app_save('', ['name' => 'Portal', 'login_url' => 'http://x.example'], 'system:test') !== null
     && app_save('', ['name' => 'Ausfallportal'], 'system:test') !== null && app_save('', ['name' => 'X', 'short' => '<b>'], 'system:test') !== null,
     'Fachverfahren: Name Pflicht, nur https-Links, keine kritischen Begriffe, Kürzel geprüft');
-ok(app_save('', ['name' => 'Elektronische Akte', 'short' => 'eAkte', 'login_url' => 'https://akte.example/', 'external' => '1', 'category' => 'Verwaltung',
-    'dsb' => 'sehr_hoch', 'vsa' => '1', 'kritis' => '1', 'partners' => 'Landesamt X', 'roles' => ['technik' => ['it', 'gibtsnicht'], 'partner' => ['boa-krisenstab']]], 'system:test') === null
+ok(org_save('', '', '', '', [], 'system:test') !== null && org_save('', 'Landesamt X', 'abc', '', [], 'system:test') !== null
+    && org_save('', 'Landesamt X', '', "kein-mail", [], 'system:test') !== null, 'Adressbuch: Name Pflicht, Rufnummer und Adressen geprüft');
+ok(org_save('', 'Landesamt X', '+49 30 1', "Poststelle@landesamt.example\nlage@landesamt.example", [], 'system:test') === null
+    && org_save('', 'landesamt x', '', '', [], 'system:test') !== null && orgs_all()[0]['id'] === 'landesamt-x'
+    && !str_contains((string)kv_get('set:orgs'), 'landesamt.example'), 'Adressbuch: Eintrag angelegt, verschlüsselt, Name eindeutig');
+ok(org_save('landesamt-x', 'Landesamt X', '', '', [1], 'system:test') === null && orgs_all()[0]['emails'] === ['poststelle@landesamt.example'], 'Adressbuch: Adresse entfernt');
+ok(app_save('', ['name' => 'Akte2', 'external' => '1'], 'system:test') === 'Für die externe Ansicht bitte Name oder Kürzel freigeben.'
+    && app_save('', ['name' => 'Akte2', 'text_extern' => 'Ausfall'], 'system:test') !== null, 'Extern nur mit Name oder Kürzel, Infotexte geprüft');
+ok(app_save('', ['name' => 'Elektronische Akte', 'short' => 'eAkte', 'login_url' => 'https://akte.example/', 'external' => '1', 'ext_short' => '1', 'category' => 'Verwaltung',
+    'dsb' => 'sehr_hoch', 'vsa' => '1', 'kritis' => '1', 'orgs' => ['landesamt-x', 'gibtsnicht'], 'text_nutzende' => 'Bitte Papierformular nutzen.',
+    'roles' => ['technik' => ['it', 'gibtsnicht'], 'nutzende' => ['boa-krisenstab']]], 'system:test') === null
     && app_save('', ['name' => 'Elektronische Akte'], 'system:test') !== null, 'Fachverfahren angelegt, gleicher Name abgelehnt');
 $fa = apps_by_id()['eakte'] ?? [];
-ok(($fa['roles']['technik'] ?? null) === ['it'] && $fa['kritis'] && $fa['dsb'] === 'sehr_hoch' && app_flags($fa) === ['DSB: sehr hoch', 'VSA', 'KRITIS', 'Partner: Landesamt X'],
-    'Fachverfahren: nur bekannte Kreise, Einstufung');
-ok(!str_contains((string)kv_get('set:apps'), 'Akte') && !str_contains((string)kv_get('set:apps'), 'Landesamt'), 'Fachverfahren verschlüsselt gespeichert');
-ok(app_role_circles(['eakte'], ['technik']) === ['it'] && app_role_circles(['eakte'], SBCM_APP_ROLES_DEFAULT) === ['it']
-    && app_role_circles(['eakte'], ['partner']) === ['boa-krisenstab'], 'Alarmkreise je Rolle, Partner nur auf Wunsch');
+ok(($fa['roles']['technik'] ?? null) === ['it'] && $fa['kritis'] && $fa['dsb'] === 'sehr_hoch' && $fa['orgs'] === ['landesamt-x']
+    && app_flags($fa) === ['DSB: sehr hoch', 'VSA', 'KRITIS', 'Unternehmen und Behörden: Landesamt X'], 'Fachverfahren: nur bekannte Kreise und Einträge, Einstufung');
+ok(app_public_name($fa) === 'eAkte' && !$fa['ext_name'] && !$fa['ext_login'], 'Extern nur die freigegebenen Felder');
+ok(!str_contains((string)kv_get('set:apps'), 'Akte') && !str_contains((string)kv_get('set:apps'), 'Papierformular'), 'Fachverfahren verschlüsselt gespeichert');
+ok(app_role_circles(['eakte'], ['technik']) === ['it'] && app_role_circles(['eakte'], SBCM_APP_ROLES_DEFAULT) === ['it', 'boa-krisenstab'], 'Alarmkreise je Rolle');
+ok(fv_targets_set(['isb' => 'x'], 'system:test') !== null && fv_targets_set([], 'system:test') === 'Keine Änderung.'
+    && fv_targets_set(['isb' => 'ISB@firma.example', 'dsb' => 'dsb@firma.example'], 'system:test') === null
+    && fv_targets() === ['isb' => 'isb@firma.example', 'vsa' => '', 'dsb' => 'dsb@firma.example'] && !str_contains((string)kv_get('set:fv_targets'), 'firma.example'),
+    'Zieladressen: geprüft, verschlüsselt');
+ok(fv_texts_set(['text_extern' => 'Kein Ausfall'], 'system:test') !== null && fv_texts_set(['text_intern' => 'Bitte Lage prüfen.', 'ref_hoch' => 'Art. 32 DSGVO'], 'system:test') === null
+    && fv_texts()['intern'] === 'Bitte Lage prüfen.' && fv_texts()['extern'] === SBCM_FV_TEXTS['extern'][1] && dsgvo_refs()['hoch'] === 'Art. 32 DSGVO'
+    && dsgvo_refs()['sehr_hoch'] === SBCM_DSGVO_DEFAULTS['sehr_hoch'], 'Infotexte und DSGVO-Referenzen, leer = Vorbelegung');
+setting_set('apps', array_map(fn($x) => array_diff_key($x, ['ext_name' => 1, 'ext_short' => 1]), (array)setting_get('apps')));
+ok(apps_by_id()['eakte']['ext_name'] && apps_by_id()['eakte']['ext_short'], 'Ältere Einträge: Name und Kürzel extern wie bisher');
+app_save('eakte', $fa, 'system:test');
 [$fs, $fe] = parse_change_request(['mode' => 'set', 'status_key' => 'FV_NICHT_VERFUEGBAR', 'validity_type' => 'duration', 'duration' => 60], null);
 ok($fs === null && in_array('Bitte mindestens ein Fachverfahren auswählen.', $fe, true), 'Meldung zum Fachverfahren verlangt ein Verfahren');
 [$fs] = parse_change_request(['mode' => 'set', 'status_key' => 'FV_NICHT_VERFUEGBAR', 'app' => ['eakte', 'fremd'], 'validity_type' => 'duration', 'duration' => 60,
@@ -536,6 +555,26 @@ ok(($fr['payload']['apps'][0] ?? []) === ['id' => 'eakte', 'name' => 'Elektronis
     && $fr['payload']['public_label'] === 'Nicht verfügbar' && !str_contains(json_encode($fr['payload']), 'KRITIS') && !str_contains(json_encode($fr['payload']), 'Landesamt'),
     'Meldung speichert nur Name, Kürzel, Links und die externe Fassung, keine Einstufung');
 ok(!status_for_all($fr['payload']) && str_contains(mail_vars_status($fr['payload'], null)['locations'], '- Elektronische Akte (eAkte)'), 'Kein "Für alle", Verfahren in der ALARM-Mail');
+$plan = array_column(app_notice_plan('new', $fr['payload'], $fr['valid_until']), null, 'title');
+$pe = $plan['Unternehmen und Behörden · Elektronische Akte (Landesamt X)'] ?? [];
+ok(isset($plan['Verantwortlich, Technik, Betrieb · Elektronische Akte'], $plan['Nutzende · Elektronische Akte'], $plan['Informationssicherheit'], $plan['Datenschutz'], $plan['VSA (Geheimschutz)'])
+    && $plan['VSA (Geheimschutz)']['missing'] && $plan['Datenschutz']['emails'] === ['dsb@firma.example'], 'Pflicht-Mails: alle Gruppen, fehlende Zieladresse erkannt');
+ok(str_starts_with($plan['Verantwortlich, Technik, Betrieb · Elektronische Akte']['body'], 'Bitte Lage prüfen.')
+    && str_starts_with($plan['Nutzende · Elektronische Akte']['body'], 'Bitte Papierformular nutzen.')
+    && str_contains($plan['Datenschutz']['body'], SBCM_DSGVO_DEFAULTS['sehr_hoch']) && str_contains($plan['Informationssicherheit']['body'], 'KRITIS: ja'),
+    'Pflicht-Mails: Infotext je Gruppe, Einstufung und DSGVO-Referenz nur intern');
+ok($pe && $pe['emails'] === ['poststelle@landesamt.example'] && str_contains($pe['body'], 'Nicht verfügbar') && !str_contains($pe['body'], 'KRITIS')
+    && !str_contains($pe['body'], 'Ersatzverfahren') && !str_contains($pe['body'], 'akte.example') && str_contains($pe['body'], 'sd@ziel.example') === (public_page()['email'] !== ''),
+    'Unternehmen und Behörden: nur allgemeine Fassung, keine Einstufung');
+[$amails] = alarm_targets($fs + ['circles' => ['it']], $fr['payload']);
+ok(!array_intersect($amails, app_notice_emails($fr['payload'])), 'ALARM-Mail erreicht Empfänger der Pflicht-Mails nicht doppelt');
+$exP = ['exercise' => true] + $fr['payload'];
+ok(!array_filter(app_notice_plan('new', $exP, null), fn($p) => $p['group'] === 'extern'), 'Übung: keine Mail an Unternehmen und Behörden');
+array_map('unlink', glob(storage_dir() . '/outbox/*.eml') ?: []);
+$ns = send_app_notices('new', (int)$fr['id'], $fr['payload'], $fr['valid_until'], 'anna');
+$eml = implode("\n", array_map('file_get_contents', glob(storage_dir() . '/outbox/*.eml') ?: []));
+ok($ns['ok'] > 0 && $ns['failed'] === 0 && $ns['missing'] === ['VSA (Geheimschutz)'] && str_contains($eml, 'poststelle@landesamt.example')
+    && !preg_match('/^(To|Cc):.*landesamt/mi', $eml), 'Pflicht-Mails versendet, Empfänger nur per BCC');
 $fb = status_board();
 ok(isset(app_states($fb)['eakte']) && isset(app_states($fb, true)['eakte']), 'Zustand je Verfahren aus den gültigen Meldungen');
 $fb2 = $fb;
