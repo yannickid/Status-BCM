@@ -59,6 +59,7 @@ flowchart LR
   L -- HTTPS + Token --> G[GroupAlarm] --> E
   K[Cron CLI oder URL+Token] --> L
   U[externer Uptime-Check] -- HTTPS --> H[health.php] --> L
+  O[Öffentlichkeit] -- HTTPS, ohne Login, ohne Cookie --> X[extern.php<br>nur extern sichtbare Fachverfahren] --> L
   F[config.local.inc.php<br>Master-Key, Hashes] -. nur lesend .-> L
   J[config.json<br>freigegebene Texte] -. nur lesend .-> L
 ```
@@ -151,7 +152,7 @@ nicht mehr lesbar. Ein Schlüsselwechsel ist nur bei einer Neuinstallation vorge
 | Meldung gesetzt / verlängert / geändert / beendet / automatisch beendet | `status.set`, `status.extend`, `status.update`, `status.end`, `status.auto_end` (Meldungsnummer, vorher → nachher, Standorte, Kontakte, Gültigkeit, ALARM ja/nein, TOTP ja/nein, interne Notiz) |
 | Mails | `mail.alarm` (Art neu/Aktualisierung/Ende, gewählte Kreise, Anzahl Standortadressen), `mail.reminder`, `mail.autorevert`, `mail.pw_reminder`, `mail.anchor` (nur Anzahl erfolgreich/fehlgeschlagen) |
 | Benutzerverwaltung | `user.create`, `user.reset_pw`, `user.set_pw`, `user.reset_totp`, `user.set_totp`, `user.role`, `user.disable`, `user.enable` |
-| Einrichtung und System | `system.install`, `setting.stage1`, `setting.cc1`, `setting.alarm_to`, `setting.level_cc` (mit Stufe), `setting.default_phone`, `setting.circle_create/update/delete`, `setting.circle_channels`, `setting.location_create/update/delete`, `setting.contact_create/update/delete`, `setting.mail_prefix` (Adressen und Nummern nur maskiert), `system.cron_manual`, `mail.test` |
+| Einrichtung und System | `system.install`, `setting.stage1`, `setting.cc1`, `setting.alarm_to`, `setting.level_cc` (mit Stufe), `setting.default_phone`, `setting.circle_create/update/delete`, `setting.circle_channels`, `setting.location_create/update/delete`, `setting.contact_create/update/delete`, `setting.mail_prefix`, `setting.app_create/update/delete`, `setting.public_page` (Adressen und Nummern nur maskiert), `system.cron_manual`, `mail.test` |
 | Weitere Kanäle | `channel.alarm` (Art, je Kanal Anzahl erfolgreich/fehlgeschlagen, keine Nummern) |
 | Überwachung und Export | `monitor.cron_stale` (Warnmail bei Cron-Ausfall), `audit.export` (Format, Zeitraum, mit/ohne IP) |
 
@@ -292,6 +293,7 @@ gegebenenfalls den Personal- bzw. Betriebsrat beteiligen.
 | Exportierte Protokolle | Liegen nach dem Download außerhalb der Anwendung. Gegenmaßnahmen: nur Admins, jeder Export protokolliert, IP-Adressen nur auf Wahl; *Betreiber:* verschlüsselte Ablage und Löschfrist. |
 | Cron fällt unbemerkt aus | Hinweis, Prüfung, Warnmail und `health.php`. Ruft niemand die Seite auf, meldet es nur der externe Uptime-Check. |
 | Phishing des persönlichen Passworts | Ohne den TOTP-Code entsteht keine Sitzung. Ein Echtzeit-Phishing (Code wird sofort weitergereicht) bleibt möglich; TOTP ist nicht phishing-resistent wie FIDO2. |
+| Externe Statusseite | Zeigt, welche extern sichtbaren Anwendungen eingeschränkt sind, und ist ohne Login erreichbar. Gegenmaßnahmen: standardmäßig aus, nur gewählte Verfahren, nur allgemeine Texte, keine Einstufung, keine Sitzung; Details in [Fachverfahren](08-fachverfahren.md#risiken). |
 | Sitzungsdateien beim Hoster | Unverschlüsselt im Sitzungsordner des Hosters (Abschnitt 11.2). Gegenmaßnahme: Hoster mit getrennten Sitzungsordnern je Kunde. |
 
 ## 9. Prüfanleitung für Auditoren
@@ -349,7 +351,7 @@ auf).
 | `audit` | Änderungsprotokoll | Nr., Zeit, Akteur-Kennung, Stufe, Aktion, Objekt | **verschlüsselt:** Details (vorher/nachher, IP, Browser, Notiz, maskierte Adressen); **HMAC-Hash-Kette** | nie (Trigger verhindert `UPDATE`/`DELETE`); Frist im Löschkonzept |
 | `mail_log` | versendete Mails | Zeit, Art, Anzahl Empfänger/zugestellt | **verschlüsselt:** Betreff, Text, Zustellergebnis mit **maskierten** Adressen | derzeit keine automatische Löschung |
 | `account` | Redaktion und Admins | Kennung, Anzeigename, Rolle, aktiv, Passwortdaten (Datum) | **bcrypt:** Passwort; **verschlüsselt:** E-Mail, TOTP-Secret; **MAC** über die Zeile | nie gelöscht, nur deaktiviert |
-| `kv` | im Browser gepflegte Einstellungen | Schlüsselnamen; Zeitpunkt letzter Cron-Lauf und letzte Warnmail | **verschlüsselt:** Alarmkreise (Mail-Adressen, Signal-Nummern, GroupAlarm-Szenario), Standorte mit Adressen der Standortverwaltung, Kontakte, Präfixe, Kopie-Adresse, Adresse im An-Feld, zusätzliche Empfänger je Stufe, Standard-Rufnummer, Benutzername und Passwort-Hash (bcrypt) des gemeinsamen Zugangs | beim Entfernen unter **System** |
+| `kv` | im Browser gepflegte Einstellungen | Schlüsselnamen; Zeitpunkt letzter Cron-Lauf und letzte Warnmail | **verschlüsselt:** Alarmkreise (Mail-Adressen, Signal-Nummern, GroupAlarm-Szenario), Standorte mit Adressen der Standortverwaltung, Kontakte, Präfixe, Kopie-Adresse, Adresse im An-Feld, zusätzliche Empfänger je Stufe, Standard-Rufnummer, Fachverfahren mit Einstufung (DSB, VSA, KRITIS, Partner) und Kreisen je Rolle, Einstellungen und Kontaktdaten der externen Seite, Benutzername und Passwort-Hash (bcrypt) des gemeinsamen Zugangs | beim Entfernen unter **System** bzw. **Fachverfahren** |
 | `login_attempt` | Fehlversuche (Brute-Force-Schutz) | Zeit, Bereich, ok ja/nein | IP und Benutzer nur als **HMAC-Pseudonym** | automatisch nach 2 Tagen |
 | `totp_used` | verbrauchte TOTP-Zeitschritte (Replay-Schutz) | Kennung, Zeitschritt | – (kein Geheimnis) | automatisch nach etwa 1 Stunde |
 | `view_count` | Lesezähler | Meldungs-ID, Tag, Anzahl | – (keine IP, keine Person) | derzeit keine automatische Löschung |
@@ -376,12 +378,14 @@ auf).
 | Protokoll-Export | Gerät des Admins (Download) | Protokoll im Klartext, IP nur wenn gewählt | Download nur für Admins mit TOTP-Login, jeder Export wird protokolliert | **Datei liegt danach ungeschützt beim Admin:** verschlüsselt ablegen, zweckgebunden weitergeben, nach Zweck löschen |
 | Aushang | Papier | Adresse, QR-Code, optional Benutzername des gemeinsamen Zugangs und Notfallnummern | Passwort wird nie gedruckt | Benutzername öffentlich: das Passwort bleibt der eigentliche Schutz |
 | `health.php` | externer Uptime-Dienst | nur `ok`, `db` oder `cron` | optional Token | verrät nur Verfügbarkeit |
+| `extern.php` (wenn eingeschaltet) | Öffentlichkeit | Name/Kürzel extern sichtbarer Fachverfahren, allgemeine Statusfassung, "Stand"; Kontaktdaten erst nach Klick | keine Sitzung, kein Cookie, `noindex`, Kontaktdaten nicht im Quelltext (signiertes Token, Honeypot) | zeigt, welche externen Anwendungen gerade eingeschränkt sind (siehe [Fachverfahren → Risiken](08-fachverfahren.md#risiken)) |
 
 ### 11.4 Wer was lesen kann
 
 | Wer | kann lesen | kann nicht |
 |---|---|---|
-| Beschäftigte (gemeinsamer Zugang) | geltende und 48 h alte Meldungen | Protokoll, Adressen, Notizen |
+| Öffentlichkeit (ohne Login, nur wenn eingeschaltet) | extern sichtbare Fachverfahren mit allgemeiner Statusfassung, Kontaktdaten nach Klick | alles andere |
+| Beschäftigte (gemeinsamer Zugang) | geltende und 48 h alte Meldungen, Fachverfahren mit Links, Kategorie und Bereich | Protokoll, Adressen, Notizen, Einstufung der Fachverfahren (DSB, VSA, KRITIS, Partner) |
 | Redaktion (Kennung + Passwort + TOTP) | zusätzlich Verlauf, Protokoll (mit IP und Notizen), Nutzung, Aushang | Adressen im Klartext, Export |
 | Admin | zusätzlich Benutzer, System (Adressen und Nummern nur maskiert), Export | Passwörter, TOTP-Secrets, Adressen im Klartext |
 | Hoster / DB-Administration ohne Datei-Zugriff | Klartextspalten aus 11.1 (wer hat wann welchen Status gesetzt) | verschlüsselte Inhalte; unbemerkt fälschen |

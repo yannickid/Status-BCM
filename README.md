@@ -36,6 +36,9 @@ erreichbar, wenn Netzwerk, Telefon oder Mail im Haus gestört sind.
 * **Selbstüberwachung:** Warnung bei Cron-Ausfall (Hinweis, Prüfung, Warnmail) und `health.php` für einen externen
   Uptime-Check.
 * **Aushang:** druckbare A4-Seite mit QR-Code zur Statusseite für Schwarzes Brett und Notfallordner.
+* **Fachverfahren:** Status je Anwendung mit Name, Kürzel, Login- und Hilfe-Link; intern nach Anmeldung (optional auch
+  "Verfügbar"), extern ohne Login nur mit allgemeinen Texten und geschützten Kontaktdaten. Alarmierung über Kreise je
+  Rolle (Verantwortlich, Technik, Betrieb, Nutzende, Partner); Einstufung (DSB, VSA, KRITIS, Partner) nur intern.
 * **Protokoll-Export** als CSV und barrierefreies PDF (PDF/UA-1) für Revision und ISB, mit Integritätsprüfung und Kopf-Hash.
 * **Revisionssicheres Protokoll:** wer, was, wann, wie; Hash-Kette mit HMAC, append-only per DB-Trigger, täglicher
   Audit-Anker per Mail.
@@ -72,6 +75,7 @@ Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-install
 | [Betrieb](docs/04-betrieb.md) | Routine, Updates, Backup, Notfälle, nginx, DB-Härtung |
 | [Sicherheit und Audit](docs/05-sicherheit-und-audit.md) | Schutzbedarf, Maßnahmen nach BSI IT-Grundschutz, Protokollierung, wo was wie gespeichert und verschlüsselt ist, Restrisiken, Prüfanleitung |
 | [Barrierefreiheit](docs/07-barrierefreiheit.md) | Stand nach WCAG 2.1 AA / BITV 2.0, Grenzen, Vorlage für die Erklärung |
+| [Fachverfahren](docs/08-fachverfahren.md) | Status je Anwendung intern und extern, Datenfluss, Datenschutz, Risiken |
 | [Governance](docs/06-governance.md) | Unterlagen für BSI-Grundschutz, ISB, ISMS (Strukturanalyse, Schutzbedarfsfeststellung, IT-Sicherheitskonzept, Risikoanalyse), BCM und Datenschutz |
 
 ## Aufbau
@@ -84,6 +88,8 @@ Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-install
 | `admin.php` | Benutzerverwaltung (nur Admins) |
 | `system.php` | System (nur Admins): Prüfung, Cron-Adresse, Alarmkreise mit Signal/GroupAlarm, Standorte mit E-Mail der Standortverwaltung, Kontakte, Betreff-Präfixe, An-Feld, Empfänger je Stufe, Standard-Rufnummer, Kopie-Adresse, Zugangspasswort, Protokoll-Export, Testmail |
 | `aushang.php` | druckbarer Aushang mit QR-Code (persönliche Anmeldung) |
+| `verfahren.php` | Fachverfahren und externe Statusseite pflegen (nur Admins) |
+| `extern.php` | externe Statusseite der Fachverfahren ohne Login (standardmäßig aus) |
 | `export.php` | Protokoll-Export CSV/PDF (nur Admins) |
 | `health.php` | Gesundheitsprüfung für externe Uptime-Dienste (200 `ok` / 503) |
 | `pdf.inc.php` | PDF-Schreiber für den Export (ohne Bibliotheken), getaggt nach PDF/UA-1 mit eingebetteter Schrift (`assets/fonts`, Liberation Sans, SIL OFL) |

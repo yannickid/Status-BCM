@@ -276,6 +276,22 @@ function form_locations(array $bcm, array $sel, bool $all, string $sfx): string
     return $h . '</fieldset>';
 }
 
+function form_apps(array $sel, string $sfx): string
+{
+    $list = apps_all();
+    if (!$list) {
+        return '';
+    }
+    $h = '<fieldset class="mb-3"><legend class="form-label fs-6 fw-semibold mb-1">Betroffene Fachverfahren <span class="text-body-secondary small fw-normal">(nur bei Status "Fachverfahren")</span></legend>';
+    foreach ($list as $i => $a) {
+        $h .= '<div class="form-check"><input class="form-check-input" type="checkbox" id="f' . $sfx . '_' . (int)$i . '" name="app[]" value="' . h($a['id']) . '"'
+            . (in_array($a['id'], $sel, true) ? ' checked' : '') . '><label class="form-check-label" for="f' . $sfx . '_' . (int)$i . '">' . h($a['name'])
+            . ($a['short'] !== '' ? ' <span class="text-body-secondary small">(' . h($a['short']) . ')</span>' : '')
+            . (($fl = app_flags($a)) ? ' <span class="small text-body-secondary">· ' . h(implode(' · ', $fl)) . '</span>' : '') . '</label></div>';
+    }
+    return $h . '</fieldset>';
+}
+
 function form_contacts(array $sel, string $sfx): string
 {
     $list = contacts_all();
@@ -309,7 +325,7 @@ function form_validity(array $bcm, array $old, string $sfx): string
         . '><label class="form-check-label" for="vx' . $sfx . '">Unbefristet <span class="text-body-secondary small">(nur wo zulässig)</span></label></div></fieldset>';
 }
 
-function form_alarm(array $old, string $sfx, string $label): string
+function form_alarm(array $old, string $sfx, string $label, bool $apps = true): string
 {
     $sel = array_map('strval', (array)($old['circles'] ?? []));
     $h = '<fieldset class="mb-3 border rounded p-2"><div class="form-check"><input class="form-check-input" type="checkbox" id="am' . $sfx . '" name="alarm_mail" value="1"'
@@ -321,9 +337,18 @@ function form_alarm(array $old, string $sfx, string $label): string
             . (in_array($c['id'], $sel, true) ? ' checked' : '') . '><label class="form-check-label" for="k' . $sfx . '_' . (int)$i . '">' . h($c['name'])
             . ' <span class="text-body-secondary small">(' . count($c['emails']) . ' Adressen)</span></label></div>';
     }
+    if ($apps && apps_all()) {
+        $roles = array_key_exists('alarm_mail', $old) ? array_map('strval', (array)($old['app_role'] ?? [])) : SBCM_APP_ROLES_DEFAULT;
+        $h .= '<div class="small text-body-secondary mt-2 mb-1">Bei Fachverfahren zusätzlich die Kreise dieser Rollen:</div><div class="d-flex flex-wrap gap-3">';
+        foreach (SBCM_APP_ROLES as $r => $rl) {
+            $h .= '<div class="form-check"><input class="form-check-input" type="checkbox" id="ar' . $sfx . $r . '" name="app_role[]" value="' . h($r) . '"'
+                . (in_array($r, $roles, true) ? ' checked' : '') . '><label class="form-check-label" for="ar' . $sfx . $r . '">' . h($rl) . '</label></div>';
+        }
+        $h .= '</div>';
+    }
     $nl = !array_key_exists('alarm_mail', $old) || !empty($old['notify_loc']);
     return $h . '<div class="form-check"><input class="form-check-input" type="checkbox" id="nl' . $sfx . '" name="notify_loc" value="1"' . ($nl ? ' checked' : '')
-        . '><label class="form-check-label" for="nl' . $sfx . '">Standortverwaltungen informieren <span class="text-body-secondary small">(betroffene Standorte; bei Meldungen für alle: alle Standorte)</span></label></div></fieldset>';
+        . '><label class="form-check-label" for="nl' . $sfx . '">Standortverwaltungen informieren <span class="text-body-secondary small">(betroffene Standorte; bei Meldungen für alle: alle Standorte; nicht bei Fachverfahren)</span></label></div></fieldset>';
 }
 
 function form_note(array $old, string $sfx): string
@@ -348,14 +373,43 @@ if (is_array($pending) && ($pending['user'] ?? '') === $user['id'] && time() - (
     if ($spec['mode'] === 'end') {
         echo '<p class="text-body-secondary small">Die Meldung wird beendet und bleibt ' . (int)cfg('display.keep_hours', 48)
             . ' Stunden ausgegraut mit dem Vermerk "zurückgenommen / gelöst" sichtbar:</p>';
-        render_status_card(($target ?? ['payload' => build_payload($def, $spec['loc_ids']), 'created_at' => null, 'valid_until' => null, 'mac_ok' => true])
+        render_status_card(($target ?? ['payload' => build_payload($def, $spec['loc_ids'], '', [], $spec['app_ids'] ?? []), 'created_at' => null, 'valid_until' => null, 'mac_ok' => true])
             + ['gone' => 'ended', 'gone_at' => now_utc()], true);
         $payload = $target['payload'] ?? build_payload($def, $spec['loc_ids']);
     } else {
-        $payload = build_payload($def, $spec['loc_ids'], $spec['note'], $spec['contact_ids']);
+        $payload = build_payload($def, $spec['loc_ids'], $spec['note'], $spec['contact_ids'], $spec['app_ids'] ?? []);
         echo '<p class="text-body-secondary small">So sehen alle Personen mit Zugang die Meldung:</p>';
         render_status_card(['payload' => $payload, 'created_at' => now_utc(), 'valid_until' => $spec['valid_until'],
             'mac_ok' => true, 'author' => $user['id'], 'alarm_mail' => $spec['alarm_mail'] ? 1 : 0], true);
+    }
+    // Fachverfahren: Hinweise aus der internen Einstufung (Meldepflichten, Partner) und Wirkung auf der externen Seite
+    $selApps = array_values(array_filter(apps_all(), fn($a) => in_array($a['id'], (array)($spec['app_ids'] ?? []), true)));
+    $appNotes = [];
+    foreach ($selApps as $a) {
+        $n = [];
+        if ($a['kritis']) {
+            $n[] = 'KRITIS: Meldepflichten (z. B. BSI) prüfen';
+        }
+        if ($a['vsa']) {
+            $n[] = 'VSA: Geheimschutzbeauftragte informieren';
+        }
+        if (in_array($a['dsb'], ['hoch', 'sehr_hoch'], true)) {
+            $n[] = 'DSB-Sensibilität ' . SBCM_APP_DSB[$a['dsb']] . ': Datenschutz einbinden, falls personenbezogene Daten betroffen sein könnten';
+        }
+        if ($a['partners'] !== '') {
+            $n[] = 'Partner mitinformieren: ' . $a['partners'];
+        }
+        if ($n) {
+            $appNotes[] = '<li><strong>' . h($a['name']) . ':</strong> ' . h(implode('; ', $n)) . '</li>';
+        }
+    }
+    if ($appNotes) {
+        echo '<div class="alert alert-info"><strong>Hinweise zu den Fachverfahren (nur intern)</strong><ul class="mb-0">' . implode('', $appNotes) . '</ul></div>';
+    }
+    $ext = array_filter($selApps, fn($a) => $a['external']);
+    if ($ext && public_page()['enabled'] && $spec['mode'] !== 'end') {
+        echo '<p class="small text-body-secondary">Auf der externen Statusseite erscheint für ' . h(implode(', ', array_column($ext, 'name'))) . ' nur: "'
+            . h((string)($payload['public_label'] ?? '')) . '" mit dem Text "' . h((string)($payload['public_text'] ?? '')) . '"' . (!empty($payload['exercise']) ? ' (Übungen nicht)' : '') . '.</p>';
     }
     if ($spec['alarm_mail']) {
         [$to, $names, $locCount] = alarm_targets($spec, $payload);
@@ -422,15 +476,18 @@ foreach ($open as $r) {
     echo '</select><button class="btn btn-primary" type="submit" name="action" value="preview">Verlängern</button></div></form>';
     $locSel = array_column($r['payload']['locations'] ?? [], 'id');
     $conSel = array_column($r['payload']['contacts'] ?? [], 'id');
+    $appSel = array_column($r['payload']['apps'] ?? [], 'id');
+    $isApp = $def['audience'] === 'FACHVERFAHREN';
     echo '<details class="mb-2"' . ($o && ($o['mode'] ?? '') === 'update' ? ' open' : '') . '><summary>Ändern (Standorte, Kontakt, Gültigkeit, ALARM-Mail)</summary>'
         . '<form method="post" action="change.php" class="mt-2">' . $hidden . '<input type="hidden" name="mode" value="update">'
         . ($def['audience'] === 'ALLE_UND_ADRESSLISTE' ? form_locations($bcm, array_map('strval', (array)($o['loc'] ?? $locSel)), !empty($o['loc_all']), 'u' . $sfx) : '')
+        . ($isApp ? form_apps(array_map('strval', (array)($o['app'] ?? $appSel)), 'u' . $sfx) : '')
         . form_contacts(array_map('strval', (array)($o['contacts'] ?? $conSel)), 'u' . $sfx) . form_validity($bcm, $o, 'u' . $sfx)
-        . ($def['alarm_mail_allowed'] ? form_alarm($o, 'u' . $sfx, 'ALARM-Mail "Aktualisierung" senden') : '') . form_note($o, 'u' . $sfx)
+        . ($def['alarm_mail_allowed'] ? form_alarm($o, 'u' . $sfx, 'ALARM-Mail "Aktualisierung" senden', $isApp) : '') . form_note($o, 'u' . $sfx)
         . '<button class="btn btn-outline-primary" type="submit" name="action" value="preview">Vorschau</button></form></details>';
     echo '<details' . ($o && ($o['mode'] ?? '') === 'end' ? ' open' : '') . '><summary class="text-danger">Beenden (zurückgenommen / gelöst)</summary>'
         . '<form method="post" action="change.php" class="mt-2">' . $hidden . '<input type="hidden" name="mode" value="end">'
-        . ($def['alarm_mail_allowed'] ? form_alarm($o, 'e' . $sfx, 'ALARM-Mail "Ende" senden') : '') . form_note($o, 'e' . $sfx)
+        . ($def['alarm_mail_allowed'] ? form_alarm($o, 'e' . $sfx, 'ALARM-Mail "Ende" senden', $isApp) : '') . form_note($o, 'e' . $sfx)
         . '<button class="btn btn-outline-danger" type="submit" name="action" value="preview">Vorschau</button></form></details>';
     echo '</div></div>';
 }
@@ -452,12 +509,13 @@ foreach ($bcm['statuses'] as $s) {
     if ($s['key'] === $bcm['default_status']) {
         continue;
     }
-    $tag = $s['audience'] === 'ALLE_UND_ADRESSLISTE' ? ' · mit Standortliste' : '';
+    $tag = ['ALLE_UND_ADRESSLISTE' => ' · mit Standortliste', 'FACHVERFAHREN' => ' · Fachverfahren'][$s['audience']] ?? '';
     echo '<option value="' . h($s['key']) . '"' . (($o['status_key'] ?? '') === $s['key'] ? ' selected' : '') . '>'
         . h($s['label'] . ' (' . severity_label($s['severity']) . ')' . $tag) . '</option>';
 }
 echo '</select>';
 echo form_locations($bcm, array_map('strval', (array)($o['loc'] ?? [])), !empty($o['loc_all']), 'n');
+echo form_apps(array_map('strval', (array)($o['app'] ?? [])), 'n');
 echo form_contacts(array_map('strval', (array)($o['contacts'] ?? [])), 'n');
 echo form_validity($bcm, $o, 'n');
 echo form_alarm($o, 'n', 'ALARM-Mail senden');

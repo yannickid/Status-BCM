@@ -367,6 +367,59 @@ try {
     $vis = preg_replace('/^X-Envelope-Rcpt:.*\r\n/', '', $alarm) ?? '';
     ok($alarm !== '' && str_contains($vis, 'To: status@test.example') && !str_contains($vis, 'undisclosed') && !str_contains($vis, 'ziel'), 'Alarm-Mail an die Absenderadresse, Empfänger nur per BCC');
 
+    /* --- Fachverfahren: Pflege, Meldung, interne Übersicht, externe Seite --- */
+    [$c] = req('GET', "$base/extern.php");
+    ok($c === 404, 'Externe Seite ist ausgeschaltet, solange nicht freigegeben');
+    [$c, , $b] = req('GET', "$base/verfahren.php", [], $jar);
+    ok($c === 200 && str_contains($b, 'Neues Fachverfahren') && str_contains($b, 'href="verfahren.php"'), 'Admin-Seite Fachverfahren');
+    [$c] = req('POST', "$base/verfahren.php", ['_csrf' => $t, 'action' => 'app_save', 'id' => '', 'name' => 'Elektronische Akte', 'short' => 'eAkte',
+        'login_url' => 'https://akte.example/login', 'help_url' => 'https://akte.example/hilfe', 'external' => '1', 'green_int' => '1',
+        'category' => 'Verwaltung', 'area' => 'Zentrale Dienste', 'dsb' => 'hoch', 'kritis' => '1', 'partners' => 'Landesamt X',
+        'roles' => ['technik' => ['it'], 'partner' => ['allgemein']], 'totp' => fresh_code($secret)], $jar);
+    [$c2] = req('POST', "$base/verfahren.php", ['_csrf' => $t, 'action' => 'public_page', 'enabled' => '1', 'title' => 'Status unserer Anwendungen',
+        'phone' => '+49 30 99999', 'email' => 'servicedesk@ziel.example', 'ticket_url' => 'https://tickets.example/neu', 'ticket_label' => 'Ticket erstellen',
+        'totp' => fresh_code($secret)], $jar);
+    [, , $b] = req('GET', "$base/verfahren.php", [], $jar);
+    ok($c === 302 && $c2 === 302 && str_contains($b, 'Fachverfahren (1)') && str_contains($b, 'value="Elektronische Akte"'), 'Fachverfahren und externe Seite gespeichert');
+    [$c, $h, $b] = req('GET', "$base/extern.php");
+    ok($c === 200 && empty($h['set-cookie']) && str_contains($h['x-robots-tag'] ?? '', 'noindex') && str_contains($b, 'keine Meldungen')
+        && !str_contains($b, 'Elektronische Akte'), 'Externe Seite: ohne Cookie, noindex, ohne Störung und ohne "Grün extern" kein Verfahren');
+    ok(!str_contains($b, 'servicedesk') && !str_contains($b, '99999') && !str_contains($b, 'tickets.example') && str_contains($b, 'Kontakt anzeigen'),
+        'Kontaktdaten stehen nicht im Quelltext');
+    preg_match('/name="t" value="([0-9a-f.]+)"/', $b, $tm);
+    [, , $b] = req('POST', "$base/extern.php", ['t' => $tm[1] ?? '', 'website' => '']);
+    ok(!str_contains($b, 'servicedesk') && str_contains($b, 'noch einmal'), 'Kontakt: zu schnelles Absenden (Bot) zeigt nichts');
+    sleep(2);
+    [, , $b] = req('POST', "$base/extern.php", ['t' => $tm[1] ?? '', 'website' => 'spam']);
+    ok(!str_contains($b, 'servicedesk'), 'Kontakt: ausgefülltes Honeypot-Feld zeigt nichts');
+    [, , $b] = req('POST', "$base/extern.php", ['t' => $tm[1] ?? '', 'website' => '']);
+    ok(str_contains($b, 'mailto:servicedesk@ziel.example') && str_contains($b, 'tel:+493099999') && str_contains($b, 'rel="nofollow noopener noreferrer"'),
+        'Kontakt nach Klick: Telefon, E-Mail, Ticket-Link (nofollow)');
+    [, , $b] = req('GET', "$base/index.php");
+    ok(str_contains($b, 'href="extern.php"'), 'Anmeldeseite verlinkt die externe Seite');
+    [, , $b] = req('GET', "$base/change.php", [], $jar);
+    ok(str_contains($b, 'name="app[]" value="eakte"') && str_contains($b, 'name="app_role[]" value="technik" checked')
+        && !str_contains($b, 'name="app_role[]" value="partner" checked'), 'Meldungsformular: Fachverfahren und Rollen (Partner nicht vorausgewählt)');
+    [, , $b] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'preview', 'mode' => 'set', 'status_key' => 'FV_NICHT_VERFUEGBAR', 'app' => ['eakte'],
+        'validity_type' => 'duration', 'duration' => '120', 'alarm_mail' => '1', 'app_role' => ['technik'], 'notify_loc' => '1'], $jar);
+    [, , $b] = req('GET', "$base/change.php", [], $jar);
+    ok(str_contains($b, 'KRITIS: Meldepflichten') && str_contains($b, 'Partner mitinformieren: Landesamt X') && str_contains($b, 'Elektronische Akte')
+        && str_contains($b, 'erscheint für Elektronische Akte nur: "Nicht verfügbar"') && str_contains($b, 'per BCC: IT. Kopie'),
+        'Vorschau: Einstufungs-Hinweise, externe Wirkung, Alarm nur an die Rolle Technik (ohne Standortverwaltung)');
+    preg_match('/name="pending_id" value="([0-9a-f]+)"/', $b, $m);
+    [$c] = req('POST', "$base/change.php", ['_csrf' => $t, 'action' => 'commit', 'pending_id' => $m[1] ?? '', 'totp' => fresh_code($secret)], $jar);
+    ok($c === 302, 'Meldung zum Fachverfahren gesetzt');
+    [, , $b2] = req('GET', "$base/status.php", [], $jar2);
+    ok(str_contains($b2, '<h2 class="h5">Fachverfahren</h2>') && str_contains($b2, 'Elektronische Akte') && str_contains($b2, 'href="https://akte.example/login"')
+        && str_contains($b2, 'Verwaltung · Zentrale Dienste') && !str_contains($b2, 'KRITIS') && !str_contains($b2, 'Landesamt'),
+        'Intern (gemeinsamer Zugang): Verfahren mit Links und Kategorie, ohne DSB/VSA/KRITIS/Partner');
+    [, , $b] = req('GET', "$base/status.php", [], $jar);
+    ok(str_contains($b, 'DSB: hoch · KRITIS · Partner: Landesamt X'), 'Intern (persönliche Kennung): mit Einstufung');
+    [$c, , $b] = req('GET', "$base/extern.php");
+    ok(str_contains($b, 'Elektronische Akte') && str_contains($b, 'Nicht verfügbar') && str_contains($b, 'Wir arbeiten an der Wiederherstellung')
+        && !str_contains($b, 'Ersatzverfahren') && !str_contains($b, 'KRITIS') && !str_contains($b, 'Verwaltung') && !str_contains($b, 'akte.example')
+        && !str_contains($b, 'Sicherheitsmaßnahme'), 'Extern: nur allgemeine Fassung, keine internen Angaben, keine Links, keine anderen Meldungen');
+
     /* --- Cron per URL --- */
     [$c] = req('GET', "$base/cron.php");
     ok($c === 403, 'cron.php ohne Token verboten');

@@ -7,11 +7,12 @@ geprüften Stand, die bekannten Grenzen und enthält eine Vorlage für die Erkl�
 > (z. B. NVDA, VoiceOver, TalkBack) durch Fachleute oder Betroffene steht noch aus. Für eine öffentliche Stelle ist
 > sie vor der Veröffentlichung der Erklärung zu empfehlen (BITV-Test oder vergleichbar).
 
-## Geprüfter Stand (Version 1.5.0)
+## Geprüfter Stand (Version 1.6.0)
 
-Geprüft am 06.10.2026 mit axe-core 4 (Regelsätze WCAG 2.0/2.1 A und AA sowie Best Practices) auf allen Seiten:
+Geprüft am 06.10.2026 (Fachverfahren-Seiten am 07.10.2026) mit axe-core 4 (Regelsätze WCAG 2.0/2.1 A und AA sowie Best Practices) auf allen Seiten:
 Anmeldung, Fehlermeldung, TOTP-Schritt, Statusseite, Einstellungen, Vorschau, Benutzer, System, Aushang, Einrichtung,
-Abmeldezeit-Rahmen. Der PDF-Export wurde mit veraPDF 1.28 gegen PDF/UA-1 geprüft (106 von 106 Regeln erfüllt).
+Abmeldezeit-Rahmen, Fachverfahren (Pflege), Meldung und Vorschau zu Fachverfahren, interne Übersicht, externe Statusseite
+mit und ohne angezeigte Kontaktdaten. Der PDF-Export wurde mit veraPDF 1.28 gegen PDF/UA-1 geprüft (106 von 106 Regeln erfüllt).
 Dazu Durchsicht des Codes.
 
 | Anforderung (WCAG 2.1) | Stand |

@@ -10,7 +10,7 @@ if (!defined('SBCM')) {
     exit;
 }
 
-const SBCM_VERSION = '1.5.0';
+const SBCM_VERSION = '1.6.0';
 define('SBCM_ZERO', str_repeat('0', 64));
 
 /* ====================================================================== */
@@ -82,6 +82,9 @@ function bcm(bool $reload = false, bool $raw = false): array
             $s['require_validity']   = $s['require_validity'] ?? ($sev !== 'ok');
             $s['allow_unlimited']    = $s['allow_unlimited'] ?? ($sev === 'ok');
             $s['require_totp']       = $s['require_totp'] ?? in_array($sev, ['warn', 'critical'], true);
+            // Fachverfahren: allgemeinere Fassung für die externe Seite (ohne Ursachen, ohne Details)
+            $s['public_label']       = trim((string)($s['public_label'] ?? '')) ?: $s['label'];
+            $s['public_text']        = trim((string)($s['public_text'] ?? '')) ?: $s['text'];
             $j['by_key'][$s['key']]  = $s;
         }
         // Vorlage für die Ende-Mail (ältere config.json haben sie noch nicht)
@@ -146,8 +149,11 @@ function bcm_validate($j): array
         if (!in_array($s['severity'] ?? '', $sevs, true)) {
             $e[] = "$k: severity ungültig";
         }
-        if (!in_array($s['audience'] ?? '', ['ALLE', 'ALLE_UND_ADRESSLISTE'], true)) {
-            $e[] = "$k: audience muss ALLE oder ALLE_UND_ADRESSLISTE sein";
+        if (!in_array($s['audience'] ?? '', ['ALLE', 'ALLE_UND_ADRESSLISTE', 'FACHVERFAHREN'], true)) {
+            $e[] = "$k: audience muss ALLE, ALLE_UND_ADRESSLISTE oder FACHVERFAHREN sein";
+        }
+        if (mb_strlen(trim((string)($s['public_label'] ?? ''))) > 40 || mb_strlen(trim((string)($s['public_text'] ?? ''))) > 300) {
+            $e[] = "$k: public_label > 40 oder public_text > 300 Zeichen";
         }
         $label = trim((string)($s['label'] ?? ''));
         $text  = trim((string)($s['text'] ?? ''));
@@ -215,7 +221,7 @@ function bcm_lint(array $j): array
 {
     $w = [];
     foreach ($j['statuses'] ?? [] as $s) {
-        foreach (['label', 'text'] as $f) {
+        foreach (['label', 'text', 'public_label', 'public_text'] as $f) {
             foreach (critical_terms_in((string)($s[$f] ?? ''), $j) as $t) {
                 $w[] = ($s['key'] ?? '?') . ".$f enthält kritischen Begriff \"$t\"";
             }
@@ -1390,6 +1396,251 @@ function contact_delete(string $id, string $actor, array $how = []): ?string
     return null;
 }
 
+/* ---- Fachverfahren / Unternehmensanwendungen ---------------------------- */
+
+/** Rollen, denen je Fachverfahren Alarmkreise zugeordnet werden. Partner sind standardmäßig nicht vorausgewählt. */
+const SBCM_APP_ROLES = ['verantwortlich' => 'Verantwortlich', 'technik' => 'Technik', 'betrieb' => 'Betrieb', 'nutzende' => 'Nutzende',
+    'partner' => 'Partner (Behörden, Unternehmen)'];
+const SBCM_APP_ROLES_DEFAULT = ['verantwortlich', 'technik', 'betrieb', 'nutzende'];
+const SBCM_APP_DSB = ['' => 'keine Angabe', 'normal' => 'normal', 'hoch' => 'hoch', 'sehr_hoch' => 'sehr hoch'];
+
+/**
+ * Fachverfahren (verschlüsselt im kv-Speicher). Je Verfahren: Name, Kürzel, Links, Sichtbarkeit (extern, Grün intern/extern),
+ * interne Einstufung (Kategorie, Bereich, DSB-Sensibilität, VSA, KRITIS, Partner) und Alarmkreise je Rolle.
+ */
+function apps_all(): array
+{
+    $v = setting_get('apps');
+    if (!is_array($v)) {
+        return [];
+    }
+    $circles = array_column(alarm_circles(), 'id');
+    $out = [];
+    foreach ($v as $a) {
+        if (!is_array($a) || !preg_match('/^[a-z0-9-]{1,32}$/', (string)($a['id'] ?? '')) || trim((string)($a['name'] ?? '')) === '') {
+            continue;
+        }
+        $roles = [];
+        foreach (SBCM_APP_ROLES as $r => $_) {
+            // gelöschte Kreise fallen hier heraus
+            $roles[$r] = array_values(array_intersect($circles, array_map('strval', (array)($a['roles'][$r] ?? []))));
+        }
+        $out[] = [
+            'id' => (string)$a['id'], 'name' => (string)$a['name'], 'short' => (string)($a['short'] ?? ''),
+            'login_url' => (string)($a['login_url'] ?? ''), 'help_url' => (string)($a['help_url'] ?? ''),
+            'external' => !empty($a['external']), 'green_int' => !empty($a['green_int']), 'green_ext' => !empty($a['green_ext']),
+            'category' => (string)($a['category'] ?? ''), 'area' => (string)($a['area'] ?? ''),
+            'dsb' => isset(SBCM_APP_DSB[(string)($a['dsb'] ?? '')]) ? (string)($a['dsb'] ?? '') : '',
+            'vsa' => !empty($a['vsa']), 'kritis' => !empty($a['kritis']), 'partners' => (string)($a['partners'] ?? ''),
+            'roles' => $roles,
+        ];
+    }
+    return $out;
+}
+
+function apps_by_id(): array
+{
+    return array_column(apps_all(), null, 'id');
+}
+
+/** Prüft und normalisiert die Eingaben eines Fachverfahrens. Rückgabe: [Verfahren|null, Fehler|null] */
+function app_normalize(array $in): array
+{
+    $a = [];
+    foreach (['name' => 80, 'short' => 16, 'login_url' => 300, 'help_url' => 300, 'category' => 60, 'area' => 60, 'partners' => 300] as $k => $max) {
+        $a[$k] = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($in[$k] ?? '')) ?? '');
+        if (mb_strlen($a[$k]) > $max) {
+            return [null, "Feld $k ist zu lang (max. $max Zeichen)."];
+        }
+    }
+    if ($a['name'] === '') {
+        return [null, 'Bitte den Namen des Fachverfahrens angeben.'];
+    }
+    if ($a['short'] !== '' && !preg_match('/^[\p{L}0-9 .\/_-]+$/u', $a['short'])) {
+        return [null, 'Kürzel: nur Buchstaben, Ziffern, Leerzeichen und . / _ -'];
+    }
+    foreach (['login_url' => 'Login-Link', 'help_url' => 'Link zu Doku/Hilfe/Support'] as $k => $lbl) {
+        if ($a[$k] !== '' && (!str_starts_with(strtolower($a[$k]), 'https://') || !filter_var($a[$k], FILTER_VALIDATE_URL))) {
+            return [null, $lbl . ': nur vollständige https://-Adressen.'];
+        }
+    }
+    // Name und Kürzel können extern erscheinen: dieselben Regeln wie für Meldungstexte
+    if ($hits = critical_terms_in($a['name'] . "\n" . $a['short'], bcm())) {
+        return [null, 'Name oder Kürzel enthält kritische Begriffe (' . implode(', ', $hits) . ').'];
+    }
+    $dsb = (string)($in['dsb'] ?? '');
+    $a['dsb'] = isset(SBCM_APP_DSB[$dsb]) ? $dsb : '';
+    foreach (['external', 'green_int', 'green_ext', 'vsa', 'kritis'] as $k) {
+        $a[$k] = !empty($in[$k]);
+    }
+    $circles = array_column(alarm_circles(), 'id');
+    $a['roles'] = [];
+    foreach (SBCM_APP_ROLES as $r => $_) {
+        $a['roles'][$r] = array_values(array_intersect($circles, array_map('strval', (array)($in['roles'][$r] ?? []))));
+    }
+    return [$a, null];
+}
+
+function apps_store(array $list, string $action, array $details, string $actor, array $how): void
+{
+    tx(function () use ($list, $action, $details, $actor, $how) {
+        setting_set('apps', array_values($list));
+        audit('setting.' . $action, 'apps', $details + ['how' => $how], $actor, setting_level($actor));
+    });
+}
+
+/** Fachverfahren anlegen ($id = '') oder ändern. */
+function app_save(string $id, array $in, string $actor, array $how = []): ?string
+{
+    [$a, $err] = app_normalize($in);
+    if ($err) {
+        return $err;
+    }
+    $list = apps_all();
+    $flags = array_keys(array_filter(['extern' => $a['external'], 'VSA' => $a['vsa'], 'KRITIS' => $a['kritis']]));
+    $details = ['app' => $a['name'] . ($a['short'] !== '' ? ' (' . $a['short'] . ')' : ''), 'flags' => $flags,
+        'dsb' => SBCM_APP_DSB[$a['dsb']], 'circles' => array_map(fn($r) => SBCM_APP_ROLES[$r] . ': ' . count($a['roles'][$r]), array_keys(SBCM_APP_ROLES))];
+    if ($id === '') {
+        if (in_array(mb_strtolower($a['name']), array_map(fn($x) => mb_strtolower($x['name']), $list), true)) {
+            return 'Ein Fachverfahren mit diesem Namen gibt es schon.';
+        }
+        $a['id'] = slug_id($a['short'] !== '' ? $a['short'] : $a['name'], array_column($list, 'id'), 'verfahren');
+        $list[] = $a;
+        apps_store($list, 'app_create', $details, $actor, $how);
+        return null;
+    }
+    $i = array_search($id, array_column($list, 'id'), true);
+    if ($i === false) {
+        return 'Fachverfahren nicht gefunden.';
+    }
+    $a['id'] = $id;
+    $list[$i] = $a;
+    apps_store($list, 'app_update', $details, $actor, $how);
+    return null;
+}
+
+function app_delete(string $id, string $actor, array $how = []): ?string
+{
+    $list = apps_all();
+    $i = array_search($id, array_column($list, 'id'), true);
+    if ($i === false) {
+        return 'Fachverfahren nicht gefunden.';
+    }
+    $name = $list[$i]['name'];
+    array_splice($list, $i, 1);
+    apps_store($list, 'app_delete', ['app' => $name], $actor, $how);
+    return null;
+}
+
+/** Alarmkreise der gewählten Rollen aller gewählten Fachverfahren. */
+function app_role_circles(array $appIds, array $roles): array
+{
+    $out = [];
+    foreach (apps_all() as $a) {
+        if (in_array($a['id'], $appIds, true)) {
+            foreach ($roles as $r) {
+                foreach ($a['roles'][$r] ?? [] as $c) {
+                    $out[$c] = $c;
+                }
+            }
+        }
+    }
+    return array_values($out);
+}
+
+/** Interne Einstufung als kurze Angaben, z. B. ["DSB: hoch", "KRITIS"] (nur für Personen mit persönlicher Kennung). */
+function app_flags(array $a): array
+{
+    return array_values(array_filter([
+        $a['dsb'] !== '' ? 'DSB: ' . SBCM_APP_DSB[$a['dsb']] : '', $a['vsa'] ? 'VSA' : '', $a['kritis'] ? 'KRITIS' : '',
+        $a['partners'] !== '' ? 'Partner: ' . $a['partners'] : '',
+    ]));
+}
+
+/**
+ * Zustand je Fachverfahren aus den gültigen Meldungen. Rückgabe: [app_id => Meldungszeile] (jeweils die schwerste).
+ * $public: nur verifizierte Meldungen ohne Übung (für die externe Seite).
+ */
+function app_states(array $board, bool $public = false): array
+{
+    $rank = ['critical' => 0, 'warn' => 1, 'info' => 2, 'ok' => 3];
+    $out = [];
+    foreach ($board['live'] as $r) {
+        $p = (array)($r['payload'] ?? []);
+        if (empty($p['apps']) || empty($r['mac_ok']) || ($public && !empty($p['exercise']))) {
+            continue;
+        }
+        foreach ($p['apps'] as $a) {
+            $id = (string)($a['id'] ?? '');
+            if ($id !== '' && (!isset($out[$id]) || ($rank[$r['severity']] ?? 9) < ($rank[$out[$id]['severity']] ?? 9))) {
+                $out[$id] = $r;
+            }
+        }
+    }
+    return $out;
+}
+
+/* ---- Externe Statusseite (ohne Login) ------------------------------------ */
+
+function public_page(): array
+{
+    $v = setting_get('public_page');
+    $v = is_array($v) ? $v : [];
+    return ['enabled' => !empty($v['enabled']), 'title' => (string)($v['title'] ?? 'Status unserer Anwendungen'),
+        'intro' => (string)($v['intro'] ?? ''), 'phone' => (string)($v['phone'] ?? ''), 'email' => (string)($v['email'] ?? ''),
+        'ticket_url' => (string)($v['ticket_url'] ?? ''), 'ticket_label' => (string)($v['ticket_label'] ?? 'Ticketsystem'),
+        'hours' => (string)($v['hours'] ?? '')];
+}
+
+function public_page_set(array $in, string $actor, array $how = []): ?string
+{
+    $p = ['enabled' => !empty($in['enabled'])];
+    foreach (['title' => 80, 'intro' => 300, 'phone' => 40, 'email' => 120, 'ticket_url' => 300, 'ticket_label' => 40, 'hours' => 120] as $k => $max) {
+        $p[$k] = trim(preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($in[$k] ?? '')) ?? '');
+        if (mb_strlen($p[$k]) > $max) {
+            return "Feld $k ist zu lang (max. $max Zeichen).";
+        }
+    }
+    if ($p['title'] === '') {
+        return 'Bitte einen Titel für die externe Seite angeben.';
+    }
+    if ($p['phone'] !== '' && !preg_match('/^[0-9+ ()\/-]{3,40}$/', $p['phone'])) {
+        return 'Rufnummer: nur Ziffern, +, Leerzeichen, ( ) / -';
+    }
+    if ($p['email'] !== '' && !filter_var($p['email'], FILTER_VALIDATE_EMAIL)) {
+        return 'E-Mail-Adresse ungültig.';
+    }
+    if ($p['ticket_url'] !== '' && (!str_starts_with(strtolower($p['ticket_url']), 'https://') || !filter_var($p['ticket_url'], FILTER_VALIDATE_URL))) {
+        return 'Link zum Ticketsystem: nur vollständige https://-Adressen.';
+    }
+    if ($hits = critical_terms_in($p['title'] . "\n" . $p['intro'] . "\n" . $p['ticket_label'] . "\n" . $p['hours'], bcm())) {
+        return 'Die Texte enthalten kritische Begriffe (' . implode(', ', $hits) . ').';
+    }
+    $p['email'] = strtolower($p['email']);
+    tx(function () use ($p, $actor, $how) {
+        setting_set('public_page', $p);
+        audit('setting.public_page', 'public', ['enabled' => $p['enabled'], 'how' => $how], $actor, setting_level($actor));
+    });
+    return null;
+}
+
+/** Zeitgebundenes Formular-Token für "Kontakt anzeigen" (ohne Sitzung): erst nach 2 Sekunden, höchstens 30 Minuten gültig. */
+function public_reveal_token(?int $t = null): string
+{
+    $t ??= time();
+    return $t . '.' . substr(mac('public.reveal', (string)$t), 0, 32);
+}
+
+function public_reveal_ok(string $token, ?int $now = null): bool
+{
+    $now ??= time();
+    if (!preg_match('/^(\d{10})\.([0-9a-f]{32})$/', $token, $m)) {
+        return false;
+    }
+    $age = $now - (int)$m[1];
+    return $age >= 2 && $age <= 1800 && hash_equals(public_reveal_token((int)$m[1]), $token);
+}
+
 /* ---- Betreff-Präfixe der ALARM-Mail -------------------------------------- */
 
 const SBCM_PREFIX_DEFAULTS = ['new' => '[ALARM]', 'update' => '[Aktualisierung]', 'end' => '[Ende]'];
@@ -1699,7 +1950,10 @@ function bootstrap(): void
         echo $e instanceof SbcmSetupError ? $e->getMessage() . "\n" : "Interner Fehler. Bitte später erneut versuchen.\n";
     });
     send_security_headers();
-    sess_start();
+    // Externe Seite ohne Login: keine Sitzung, kein Cookie
+    if (!(defined('SBCM_NO_SESSION') && SBCM_NO_SESSION)) {
+        sess_start();
+    }
 }
 
 function redirect(string $to): void
@@ -2411,6 +2665,8 @@ function audit_describe(string $action, array $d): string
         'setting.mail_prefix' => 'Betreff-Präfixe geändert',
         'setting.alarm_to' => 'Adresse im An-Feld der ALARM-Mail geändert', 'setting.level_cc' => 'Zusätzliche Empfänger je Stufe geändert',
         'setting.default_phone' => 'Standard-Rufnummer geändert', 'setting.circle_channels' => 'Alarmkreis: Signal/GroupAlarm geändert',
+        'setting.app_create' => 'Fachverfahren angelegt', 'setting.app_update' => 'Fachverfahren geändert', 'setting.app_delete' => 'Fachverfahren gelöscht',
+        'setting.public_page' => 'Externe Statusseite geändert',
         'channel.alarm' => 'Alarm über Signal/GroupAlarm', 'audit.export' => 'Protokoll exportiert', 'monitor.cron_stale' => 'Warnung: Cron läuft nicht',
     ];
     $s = $labels[$action] ?? $action;
@@ -2444,7 +2700,10 @@ function audit_describe(string $action, array $d): string
     if (isset($d['phone']) && is_string($d['phone'])) {
         $parts[] = 'Rufnummer: ' . ($d['before'] ?? '–') . ' → ' . $d['phone'];
     }
-    foreach (['circle' => 'Kreis', 'location' => 'Standort', 'contact' => 'Kontakt'] as $f => $lbl) {
+    if (isset($d['enabled']) && is_bool($d['enabled'])) {
+        $parts[] = $d['enabled'] ? 'eingeschaltet' : 'ausgeschaltet';
+    }
+    foreach (['circle' => 'Kreis', 'location' => 'Standort', 'contact' => 'Kontakt', 'app' => 'Fachverfahren'] as $f => $lbl) {
         if (!empty($d[$f]) && is_string($d[$f])) {
             $parts[] = $lbl . ': ' . $d[$f];
         }
@@ -2501,7 +2760,7 @@ function audit_describe(string $action, array $d): string
 /* Status (verschlüsselte Nutzdaten, Zeilen-MAC, lückenlose Historie)     */
 /* ====================================================================== */
 
-function build_payload(array $def, array $locIds, string $note = '', array $contactIds = []): array
+function build_payload(array $def, array $locIds, string $note = '', array $contactIds = [], array $appIds = []): array
 {
     $b = bcm();
     // Optionale Ausweichrufnummer je Status (z. B. Mobilnummer bei eingeschränkter Festnetz-Erreichbarkeit)
@@ -2521,11 +2780,22 @@ function build_payload(array $def, array $locIds, string $note = '', array $cont
             $contacts[] = $c;
         }
     }
-    return [
+    // Fachverfahren: nur Name, Kürzel und Links (die interne Einstufung bleibt in der Verwaltung, nicht in der Meldung)
+    $apps = [];
+    foreach ($appIds ? apps_all() : [] as $a) {
+        if (in_array($a['id'], $appIds, true)) {
+            $apps[] = ['id' => $a['id'], 'name' => $a['name'], 'short' => $a['short'], 'login_url' => $a['login_url'], 'help_url' => $a['help_url']];
+        }
+    }
+    $out = [
         'label' => $def['label'], 'text' => $def['text'], 'severity' => $def['severity'],
         'exercise' => (bool)$def['exercise'], 'audience' => $def['audience'],
         'locations' => $locs, 'default_phone' => $fallback, 'contacts' => $contacts, 'note' => $note,
     ];
+    if ($def['audience'] === 'FACHVERFAHREN') {
+        $out += ['apps' => $apps, 'public_label' => $def['public_label'] ?? $def['label'], 'public_text' => $def['public_text'] ?? $def['text']];
+    }
+    return $out;
 }
 
 /** Meldungs-Nummer: alle Versionen (Verlängerung, Änderung) einer Meldung teilen sie; die erste Zeile hat msg_id NULL. */
@@ -2681,7 +2951,8 @@ function status_history(int $limit = 15): array
 function status_brief(array $row, array $payload): array
 {
     return ['id' => (int)$row['id'], 'key' => $row['status_key'], 'valid_until' => $row['valid_until'],
-        'locations' => array_column($payload['locations'] ?? [], 'id'), 'contacts' => array_column($payload['contacts'] ?? [], 'name')];
+        'locations' => array_column($payload['locations'] ?? [], 'id'), 'contacts' => array_column($payload['contacts'] ?? [], 'name'),
+        'apps' => array_column($payload['apps'] ?? [], 'name')];
 }
 
 /**
@@ -2694,7 +2965,7 @@ function status_create(array $spec, string $author, array $how = []): array
     if (!$def) {
         throw new InvalidArgumentException('Unbekannter Status');
     }
-    $payload = build_payload($def, (array)$spec['loc_ids'], (string)($spec['note'] ?? ''), (array)($spec['contact_ids'] ?? []));
+    $payload = build_payload($def, (array)$spec['loc_ids'], (string)($spec['note'] ?? ''), (array)($spec['contact_ids'] ?? []), (array)($spec['app_ids'] ?? []));
     $now = now_utc();
     $pdo = db();
     return tx(function () use ($pdo, $spec, $def, $author, $payload, $now, $how) {
@@ -2812,8 +3083,8 @@ function parse_change_request(array $in, ?array $target): array
     }
     $note = preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string)($in['note'] ?? '')) ?? '';
     $note = mb_substr(trim($note), 0, 200);
-    $spec = ['mode' => $mode, 'key' => '', 'target' => null, 'loc_ids' => [], 'contact_ids' => [], 'valid_until' => null,
-        'alarm_mail' => false, 'circles' => [], 'notify_locations' => false, 'note' => $note];
+    $spec = ['mode' => $mode, 'key' => '', 'target' => null, 'loc_ids' => [], 'contact_ids' => [], 'app_ids' => [], 'valid_until' => null,
+        'alarm_mail' => false, 'circles' => [], 'app_roles' => [], 'notify_locations' => false, 'note' => $note];
     $errors = [];
 
     if ($mode === 'set') {
@@ -2832,6 +3103,7 @@ function parse_change_request(array $in, ?array $target): array
         $spec['target'] = (int)$target['id'];
         $spec['loc_ids'] = array_values(array_column($target['payload']['locations'] ?? [], 'id'));
         $spec['contact_ids'] = array_values(array_filter(array_column($target['payload']['contacts'] ?? [], 'id')));
+        $spec['app_ids'] = array_values(array_filter(array_column($target['payload']['apps'] ?? [], 'id')));
     }
     $spec['key'] = $def['key'];
     if ($mode !== 'end') {
@@ -2850,6 +3122,13 @@ function parse_change_request(array $in, ?array $target): array
             }
             $spec['loc_ids'] = $ids;
         }
+        if ($def['audience'] === 'FACHVERFAHREN') {
+            $ids = array_values(array_intersect(array_column(apps_all(), 'id'), array_map('strval', (array)($in['app'] ?? []))));
+            if (!$ids) {
+                $errors[] = 'Bitte mindestens ein Fachverfahren auswählen.';
+            }
+            $spec['app_ids'] = $ids;
+        }
         $known = array_column(contacts_all(), 'id');
         $spec['contact_ids'] = array_values(array_intersect($known, array_map('strval', (array)($in['contacts'] ?? []))));
     }
@@ -2860,6 +3139,12 @@ function parse_change_request(array $in, ?array $target): array
             $spec['alarm_mail'] = true;
             $spec['circles'] = array_values(array_intersect(array_column(alarm_circles(), 'id'), array_map('strval', (array)($in['circles'] ?? []))));
             $spec['notify_locations'] = !empty($in['notify_loc']);
+            if ($def['audience'] === 'FACHVERFAHREN') {
+                // Kreise der gewählten Rollen je Verfahren; Standortverwaltungen nicht (die Meldung hat keine Standortliste)
+                $spec['app_roles'] = array_values(array_intersect(array_keys(SBCM_APP_ROLES), array_map('strval', (array)($in['app_role'] ?? []))));
+                $spec['circles'] = array_values(array_unique(array_merge($spec['circles'], app_role_circles($spec['app_ids'], $spec['app_roles']))));
+                $spec['notify_locations'] = false;
+            }
             [$to] = alarm_targets($spec, ['locations' => array_map(fn($i) => ['id' => $i], $spec['loc_ids'])]);
             $ct = channel_targets($spec);
             if (!$to && !($ct['signal'] && channel_enabled('signal')) && !($ct['groupalarm'] && channel_enabled('groupalarm'))) {
@@ -3292,6 +3577,12 @@ function mail_vars_status(array $payload, ?string $validUntil): array
             $loc .= '- ' . $l['name'] . ' (Durchwahl: ' . $l['phone'] . ")\n";
         }
     }
+    if (!empty($payload['apps'])) {
+        $loc .= "Betroffene Fachverfahren:\n";
+        foreach ($payload['apps'] as $a) {
+            $loc .= '- ' . $a['name'] . ($a['short'] !== '' ? ' (' . $a['short'] . ')' : '') . "\n";
+        }
+    }
     return [
         'prefix' => !empty($payload['exercise']) ? 'ÜBUNG – ' : '',
         'label' => $payload['label'], 'text' => $payload['text'], 'locations' => $loc,
@@ -3672,6 +3963,7 @@ function nav(string $active, bool $showLogout = true): void
     $links = ['status' => ['status.php', 'Status'], 'change' => ['change.php', 'Einstellungen']];
     if (session_status() === PHP_SESSION_ACTIVE && (stage2_user()['role'] ?? '') === 'admin') {
         $links['admin'] = ['admin.php', 'Benutzer'];
+        $links['verfahren'] = ['verfahren.php', 'Fachverfahren'];
         $links['system'] = ['system.php', 'System'];
     }
     foreach ($links as $k => [$href, $label]) {
@@ -3756,6 +4048,9 @@ function render_contacts(array $contacts): void
 /** Gilt die Meldung für alle? Ja ohne Standortliste (Zielgruppe ALLE) oder wenn alle Standorte gewählt sind. */
 function status_for_all(array $p): bool
 {
+    if (($p['audience'] ?? '') === 'FACHVERFAHREN') {
+        return false;
+    }
     if (($p['audience'] ?? '') === 'ALLE' || empty($p['locations'])) {
         return true;
     }
@@ -3801,6 +4096,9 @@ function render_status_card(?array $row, bool $detail = false): void
         }
         echo '</ul>';
     } elseif ($sev !== 'ok') {
+        if (!empty($p['apps'])) {
+            render_app_list($p['apps'], $gone === '');
+        }
         echo '<p>Rückfragen: <a class="tel" href="' . h(tel_href($p['default_phone'])) . '">' . h($p['default_phone']) . '</a></p>';
     }
     if ($gone === '') {
@@ -3827,6 +4125,83 @@ function render_status_card(?array $row, bool $detail = false): void
         echo '</p>';
     }
     echo '</div></section>';
+}
+
+/** Interne Einstufung sehen nur Personen mit persönlicher Kennung (nicht der gemeinsame Lesezugang). */
+function viewer_personal(): bool
+{
+    return session_status() === PHP_SESSION_ACTIVE && stage2_user() !== null;
+}
+
+/** Betroffene Fachverfahren einer Meldung (intern): Name, Kürzel, Links; Einstufung nur mit persönlicher Kennung. */
+function render_app_list(array $apps, bool $links = true): void
+{
+    $all = apps_by_id();
+    $personal = viewer_personal();
+    echo '<h3 class="h6 text-body-secondary mb-2">Betroffene Fachverfahren</h3><ul class="list-group mb-3">';
+    foreach ($apps as $a) {
+        $cur = $all[$a['id']] ?? null;
+        echo '<li class="list-group-item"><div class="fw-semibold">' . h($a['name']) . ($a['short'] !== '' ? ' <span class="text-body-secondary">(' . h($a['short']) . ')</span>' : '') . '</div>';
+        echo render_app_meta($cur ?? $a, $links, $personal);
+        echo '</li>';
+    }
+    echo '</ul>';
+}
+
+/** Links (Anmeldung, Hilfe) und interne Angaben eines Fachverfahrens als kleine Zeile(n). */
+function render_app_meta(array $a, bool $links, bool $personal): string
+{
+    $o = '';
+    $l = [];
+    if ($links && ($a['login_url'] ?? '') !== '') {
+        $l[] = '<a href="' . h($a['login_url']) . '" rel="noopener noreferrer">Zur Anmeldung</a>';
+    }
+    if ($links && ($a['help_url'] ?? '') !== '') {
+        $l[] = '<a href="' . h($a['help_url']) . '" rel="noopener noreferrer">Doku, Hilfe, Support</a>';
+    }
+    if ($l) {
+        $o .= '<div class="small d-flex flex-wrap gap-3">' . implode('', $l) . '</div>';
+    }
+    $info = array_filter([(string)($a['category'] ?? ''), (string)($a['area'] ?? '')]);
+    if ($personal && isset($a['dsb'])) {
+        $info = array_merge($info, app_flags($a));
+    }
+    if ($info) {
+        $o .= '<div class="small text-body-secondary">' . h(implode(' · ', $info)) . '</div>';
+    }
+    return $o;
+}
+
+/** Übersicht aller Fachverfahren für die interne Statusseite: gestörte immer, "verfügbar" nur wo gewünscht. */
+function render_app_overview(array $board): void
+{
+    $apps = apps_all();
+    if (!$apps) {
+        return;
+    }
+    $states = app_states($board);
+    $rank = ['critical' => 0, 'warn' => 1, 'info' => 2];
+    $rows = [];
+    foreach ($apps as $a) {
+        $st = $states[$a['id']] ?? null;
+        if ($st || $a['green_int']) {
+            $rows[] = [$st ? ($rank[$st['severity']] ?? 3) : 9, $a, $st];
+        }
+    }
+    if (!$rows) {
+        return;
+    }
+    usort($rows, fn($x, $y) => [$x[0], $x[1]['name']] <=> [$y[0], $y[1]['name']]);
+    $personal = viewer_personal();
+    echo '<section class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Fachverfahren</h2><ul class="list-group">';
+    foreach ($rows as [, $a, $st]) {
+        echo '<li class="list-group-item app-row' . ($st ? ' sev-' . h($st['severity']) : ' app-ok') . '"><div class="d-flex flex-wrap justify-content-between gap-2">'
+            . '<span class="fw-semibold">' . h($a['name']) . ($a['short'] !== '' ? ' <span class="text-body-secondary">(' . h($a['short']) . ')</span>' : '') . '</span>'
+            . ($st ? severity_badge($st['severity']) . '<span class="visually-hidden">: </span><span class="small">' . h($st['payload']['label']) . '</span>'
+                : '<span class="badge text-bg-success text-uppercase">Verfügbar</span>')
+            . '</div>' . render_app_meta($a, true, $personal) . '</li>';
+    }
+    echo '</ul></div></section>';
 }
 
 /** Alle Meldungen: gültige (oder "Regelbetrieb"), darunter ausgegraut die abgelaufenen/beendeten der letzten Stunden. */

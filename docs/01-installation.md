@@ -33,7 +33,7 @@ Empfehlung: eine eigene, neutrale Subdomain wie `status.ihre-domain.de`, ohne Be
 
 ```
 .htaccess  robots.txt  index.php  status.php  change.php  admin.php  system.php  install.php  cron.php
-aushang.php  export.php  health.php  sitzung.php  setup.php  lib.inc.php  qr.inc.php  pdf.inc.php
+aushang.php  export.php  health.php  sitzung.php  verfahren.php  extern.php  setup.php  lib.inc.php  qr.inc.php  pdf.inc.php
 config.inc.php  config.json  assets/   (mit assets/fonts/ für den PDF-Export)
 ```
 
