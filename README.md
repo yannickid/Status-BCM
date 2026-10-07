@@ -36,7 +36,7 @@ erreichbar, wenn Netzwerk, Telefon oder Mail im Haus gestört sind.
 * **Selbstüberwachung:** Warnung bei Cron-Ausfall (Hinweis, Prüfung, Warnmail) und `health.php` für einen externen
   Uptime-Check.
 * **Aushang:** druckbare A4-Seite mit QR-Code zur Statusseite für Schwarzes Brett und Notfallordner.
-* **Protokoll-Export** als CSV und PDF für Revision und ISB, mit Integritätsprüfung und Kopf-Hash.
+* **Protokoll-Export** als CSV und barrierefreies PDF (PDF/UA-1) für Revision und ISB, mit Integritätsprüfung und Kopf-Hash.
 * **Revisionssicheres Protokoll:** wer, was, wann, wie; Hash-Kette mit HMAC, append-only per DB-Trigger, täglicher
   Audit-Anker per Mail.
 * **Verschlüsselte Ablage** (AES-256-GCM) von Meldungen, Standortdaten, Mail-Inhalten, Protokolldetails und
@@ -86,7 +86,8 @@ Die ausführliche Anleitung steht in **[docs/01-installation.md](docs/01-install
 | `aushang.php` | druckbarer Aushang mit QR-Code (persönliche Anmeldung) |
 | `export.php` | Protokoll-Export CSV/PDF (nur Admins) |
 | `health.php` | Gesundheitsprüfung für externe Uptime-Dienste (200 `ok` / 503) |
-| `pdf.inc.php` | kleiner PDF-Schreiber für den Export (ohne Bibliotheken) |
+| `pdf.inc.php` | PDF-Schreiber für den Export (ohne Bibliotheken), getaggt nach PDF/UA-1 mit eingebetteter Schrift (`assets/fonts`, Liberation Sans, SIL OFL) |
+| `sitzung.php` | Abmeldezeit mit Vorwarnung und Verlängern-Knopf, eingebettet oben auf jeder angemeldeten Seite (ohne JavaScript) |
 | `install.php` | Einrichtungsassistent (sperrt sich nach der Einrichtung) und Notfallzugang |
 | `qr.inc.php` | QR-Code als SVG für die Authenticator-App (ohne externe Dienste) |
 | `cron.php` | Erinnerungen, Passwort-Erinnerungen, Audit-Anker, Aufräumen (CLI oder URL mit Token) |

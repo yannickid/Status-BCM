@@ -98,7 +98,7 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 | Ersteinrichtung | Neue Benutzer erhalten ein Einmalpasswort (einmalig angezeigt, persönlich zu übergeben). Beim ersten Login werden ein eigenes Passwort und die Authenticator-App eingerichtet. Admins sehen das TOTP-Secret nie. |
 | Zweiter Faktor | TOTP nach RFC 6238 (Authenticator-App, ohne SMS/Mail), ±30 s Toleranz, **Replay-Schutz** (jeder Zeitschritt nur einmal je Benutzer). **Beim Login mit persönlicher Kennung Pflicht** (`auth.totp_at_login`), weil die Kennung Protokoll, IP-Adressen und interne Notizen öffnet; der gemeinsame Lesezugang bleibt ohne TOTP. Zusätzlich je Aktion Pflicht bei ALARM-Mail, beim **Setzen und Beenden** von Status mit `require_totp` (Stufen "Hinweis", "Wichtiger Hinweis", Übung; eine still beendete Warnung wirkt wie eine Entwarnung) und bei jeder Admin-Aktion; optional für alle Änderungen (`auth.totp_enforce_all`). Nach Passwort ohne TOTP-Code entsteht keine Sitzung; der Zwischenschritt verfällt nach 5 Minuten oder 5 falschen Codes. |
 | Brute-Force-Schutz | Fehlversuche je IP und je Benutzer (Standard 5 bzw. 10 in 15 Min.), verzögerte Fehlantworten, Honeypot-Feld. Gilt getrennt für Stufe 1, Stufe 2, TOTP und den Cron-Token; im gemeinsamen Anmeldeformular zählt ein Fehlversuch mit persönlicher Kennung für die IP-Sperre und die Sperre der Kennung. Die Fehlermeldung verrät nicht, ob ein Name existiert. |
-| Sitzungen | Cookie `HttpOnly`, `SameSite=Strict`, `Secure` (bei HTTPS); neue Session-ID bei jedem Login; Leerlauf-Timeout 30 Min. (Stufe 1) bzw. 15 Min. (Stufe 2); harte Obergrenze 10 h; Strict Mode. |
+| Sitzungen | Cookie `HttpOnly`, `SameSite=Strict`, `Secure` (bei HTTPS); neue Session-ID bei jedem Login; Leerlauf-Timeout 30 Min. (Stufe 1) bzw. 15 Min. (Stufe 2); harte Obergrenze 10 h; Strict Mode. Oben auf jeder angemeldeten Seite steht die Abmeldezeit (`sitzung.php` im Rahmen); das Anzeigen zählt nicht als Aktivität, nur der Knopf "Verlängern" (POST mit CSRF-Token). |
 | Deaktivierung | wirkt sofort, auch für bestehende Sitzungen. Es muss immer mindestens ein aktiver Admin bleiben. |
 
 ### 5.2 Webanwendung (Bezug: APP.3.1 Webanwendungen und Webservices, APP.3.2 Webserver)
@@ -110,7 +110,7 @@ nichts unbemerkt fälschen (Abschnitt 5.4).
 | SQL | ausschließlich Prepared Statements (PDO, keine emulierten Prepares). |
 | CSRF | Token je Sitzung auf allen POST-Formularen, `SameSite=Strict`. |
 | Änderungsablauf | Formular → **Vorschau** (genau so, wie alle es sehen) → **Verbindlich setzen**. Die Vorschau verfällt nach 5 Min. |
-| HTTP-Header | strenge CSP (`default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'`), kein JavaScript; HSTS; `X-Frame-Options: DENY`; `nosniff`; `Referrer-Policy: no-referrer`; `no-store`. |
+| HTTP-Header | strenge CSP (`default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-src 'self'; frame-ancestors 'none'`), kein JavaScript; HSTS; `X-Frame-Options: DENY`. Einzige Ausnahme: `sitzung.php` darf in eigene Seiten eingebettet werden (`frame-ancestors 'self'`, `SAMEORIGIN`); `nosniff`; `Referrer-Policy: no-referrer`; `no-store`. |
 | Suchmaschinen | `X-Robots-Tag` und Meta `noindex, nofollow, noarchive`; `robots.txt` sperrt alles; vor dem Login keine Inhalte. |
 | Dateischutz | `.htaccess` sperrt Konfiguration, Bibliothek, `config.json`, `setup.php`, versteckte Dateien, `tests/`, `docs/` und `storage/`. Alle `*.inc.php` geben bei direktem Aufruf zusätzlich 403 zurück. `setup.php` läuft nur per CLI. `install.php` verlangt einen Einrichtungscode aus einer Datei in `storage/` (nur mit Dateizugriff lesbar, max. 10 Fehlversuche je 15 Min.) und sperrt sich nach der Einrichtung dauerhaft. |
 | Fehlerbehandlung | keine Fehlermeldungen im Browser (`display_errors=0`), Details nur im Server-Log. |
@@ -181,7 +181,7 @@ Details enthalten außerdem IP-Adresse, Browser und Skript bzw. bei CLI den Syst
 `php setup.php verify-audit`. Alle prüfen die gesamte Kette.
 
 **Export:** **System → Protokoll-Export** liefert CSV (Trennzeichen `;`, UTF-8, gegen Formel-Injektion in Excel
-geschützt) oder PDF (A4 quer). Kopf: Ersteller, Zeitraum, Ergebnis der Kettenprüfung, Anzahl der Einträge und
+geschützt) oder PDF (A4 quer, getaggt nach PDF/UA-1, siehe [Barrierefreiheit](07-barrierefreiheit.md)). Kopf: Ersteller, Zeitraum, Ergebnis der Kettenprüfung, Anzahl der Einträge und
 Kopf-Hash zum Zeitpunkt des Exports; die CSV enthält je Zeile zusätzlich den Hash des Eintrags. IP-Adressen nur auf
 ausdrückliche Wahl (Datensparsamkeit). Der Export selbst wird protokolliert, bevor die Datei entsteht.
 

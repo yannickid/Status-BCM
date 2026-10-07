@@ -7,10 +7,11 @@ geprüften Stand, die bekannten Grenzen und enthält eine Vorlage für die Erkl�
 > (z. B. NVDA, VoiceOver, TalkBack) durch Fachleute oder Betroffene steht noch aus. Für eine öffentliche Stelle ist
 > sie vor der Veröffentlichung der Erklärung zu empfehlen (BITV-Test oder vergleichbar).
 
-## Geprüfter Stand (Version 1.4.1)
+## Geprüfter Stand (Version 1.5.0)
 
 Geprüft am 06.10.2026 mit axe-core 4 (Regelsätze WCAG 2.0/2.1 A und AA sowie Best Practices) auf allen Seiten:
-Anmeldung, Fehlermeldung, TOTP-Schritt, Statusseite, Einstellungen, Vorschau, Benutzer, System, Aushang, Einrichtung.
+Anmeldung, Fehlermeldung, TOTP-Schritt, Statusseite, Einstellungen, Vorschau, Benutzer, System, Aushang, Einrichtung,
+Abmeldezeit-Rahmen. Der PDF-Export wurde mit veraPDF 1.28 gegen PDF/UA-1 geprüft (106 von 106 Regeln erfüllt).
 Dazu Durchsicht des Codes.
 
 | Anforderung (WCAG 2.1) | Stand |
@@ -23,7 +24,7 @@ Dazu Durchsicht des Codes.
 | 1.4.4 Text vergrößern / 1.4.10 Umbruch | erfüllt: bei 320 px Breite (entspricht 400 % Zoom) kein waagerechtes Scrollen auf allen Seiten |
 | 1.4.11 Kontrast von Bedienelementen | erfüllt mit Bootstrap-Standard; Fokusrahmen verstärkt |
 | 2.1.1 Tastatur | erfüllt: kein JavaScript, nur native Formulare, Links und Aufklappbereiche |
-| 2.2.1 Zeitbegrenzungen anpassbar | **teilweise**: Die automatische Aktualisierung der Statusseite lässt sich ausschalten (Link oben auf der Seite). Sitzungen enden aus Sicherheitsgründen nach 15 bzw. 30 Minuten Leerlauf, eine Vorschau nach 5 Minuten, ohne Vorwarnung (dafür wäre JavaScript nötig). Die Zeiten sind in `config.local.inc.php` einstellbar. |
+| 2.2.1 Zeitbegrenzungen anpassbar | erfüllt: Oben auf jeder angemeldeten Seite steht die Abmeldezeit. Zwei Minuten vor Ablauf erscheint eine Warnung (`role="alert"`) mit dem Knopf "Jetzt verlängern"; ein Klick genügt, Eingaben bleiben erhalten (siehe unten). Die Vorschau einer Meldung nennt ihre Ablaufzeit (5 Minuten). Die automatische Aktualisierung der Statusseite lässt sich ausschalten. Alle Zeiten sind in `config.local.inc.php` einstellbar. |
 | 2.4.1 Blöcke überspringen | erfüllt: Link "Zum Inhalt springen" erscheint beim ersten Tabulator |
 | 2.4.2 Seitentitel | erfüllt |
 | 2.4.7 Fokus sichtbar | erfüllt: deutlicher Fokusrahmen (3 px) |
@@ -34,10 +35,18 @@ Dazu Durchsicht des Codes.
 
 **Bekannte Grenzen**
 
-* **PDF-Export** ist kein getaggtes (barrierefreies) PDF. Barrierefreie Alternative: der CSV-Export mit demselben
-  Inhalt.
-* **Sitzungs-Zeitlimits** ohne Vorwarnung (siehe 2.2.1). Wer mehr Zeit braucht, kann `auth.stage2_idle_minutes` und
-  `auth.pending_ttl_seconds` erhöhen; das senkt die Sicherheit etwas.
+* **Vorwarnung ohne JavaScript:** Die Warnung schaltet ein zeitgesteuertes Stylesheet in einem eingebetteten Rahmen
+  (`sitzung.php`) ein; "Verlängern" lädt nur diesen Rahmen neu. Das funktioniert in allen aktuellen Browsern. Ob
+  Screenreader die Warnung beim Erscheinen sofort ansagen, hängt von Screenreader und Browser ab (`role="alert"` in
+  einem Rahmen) und ist noch nicht mit NVDA/VoiceOver geprüft. Die Abmeldezeit steht aber immer als Text oben auf der
+  Seite. Die Vorschau einer Meldung (5 Minuten) lässt sich nicht verlängern, nur neu vorbereiten. Wer mehr Zeit braucht,
+  kann `auth.stage2_idle_minutes` und `auth.pending_ttl_seconds` erhöhen; das senkt die Sicherheit etwas.
+* **PDF-Export** ist getaggt nach PDF/UA-1: Strukturbaum mit Überschrift, Absätzen und Tabelle (Spaltenköpfe mit
+  Scope), Lesereihenfolge, Sprache Deutsch, Dokumenttitel, eingebettete Schrift; Linien, Seitenzahlen und die auf
+  Folgeseiten wiederholten Kopfzeilen sind als Artefakte markiert. Grenzen: Zeichen außerhalb von Windows-1252
+  (z. B. Emojis, kyrillische Schrift) erscheinen als "?", der CSV-Export enthält sie vollständig. Die Datei wird durch
+  die eingebettete Schrift größer (etwa 500 KB). Eine automatische Prüfung (veraPDF) ersetzt nicht den
+  PDF/UA-Praxistest mit Screenreader (z. B. PAC 2024 und NVDA).
 * **TOTP-Code** setzt eine Authenticator-App voraus. Die gängigen Apps sind mit Screenreadern bedienbar; der Code
   muss innerhalb von 30 Sekunden (±30 Sekunden Toleranz) eingegeben werden.
 * **Meldungstexte** sind so verständlich wie die Texte in `config.json`. Empfehlung: kurze Sätze, Leichte Sprache
@@ -57,12 +66,12 @@ Erklärung zur Barrierefreiheit
 sowie der BITV 2.0 barrierefrei zugänglich zu machen.
 
 Stand der Vereinbarkeit mit den Anforderungen
-Diese Seite ist wegen der folgenden Unvereinbarkeiten teilweise mit den Anforderungen vereinbar.
+Diese Seite ist [vollständig / wegen der folgenden Unvereinbarkeiten teilweise] mit den Anforderungen vereinbar.
 
 Nicht barrierefreie Inhalte
-- Abmeldung nach Leerlauf ohne Vorwarnung (Sicherheitsanforderung); die automatische
-  Aktualisierung der Statusseite lässt sich abschalten.
-- Der PDF-Export des Protokolls ist nicht getaggt; der CSV-Export ist die barrierefreie Alternative.
+- Im PDF-Export des Protokolls erscheinen Zeichen außerhalb des westeuropäischen Zeichensatzes
+  als "?"; der CSV-Export enthält sie vollständig.
+- [ggf. Ergebnis der Screenreader-Prüfung der Abmelde-Warnung ergänzen]
 
 Erstellung dieser Erklärung
 Erstellt am [Datum] auf Grundlage einer Selbstbewertung (automatische Prüfung mit axe-core

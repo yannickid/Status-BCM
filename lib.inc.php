@@ -1621,12 +1621,14 @@ function send_security_headers(): void
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
     header('X-Content-Type-Options: nosniff');
-    header('X-Frame-Options: DENY');
+    // sitzung.php darf (nur) in eigene Seiten eingebettet werden: Anzeige der Abmeldezeit mit Verlängern-Knopf
+    $frame = defined('SBCM_FRAMEABLE') && SBCM_FRAMEABLE;
+    header('X-Frame-Options: ' . ($frame ? 'SAMEORIGIN' : 'DENY'));
     header('Referrer-Policy: no-referrer');
     header('Cross-Origin-Opener-Policy: same-origin');
     header('Permissions-Policy: geolocation=(), camera=(), microphone=()');
     // Nur eigene Stylesheets (Bootstrap + app.css), data:-SVGs für Bootstrap-Formularsymbole, kein JavaScript.
-    header("Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    header("Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-src 'self'; frame-ancestors " . ($frame ? "'self'" : "'none'") . "; base-uri 'none'");
     if (is_https()) {
         header('Strict-Transport-Security: max-age=31536000');
     }
@@ -1655,7 +1657,30 @@ function sess_start(): void
         session_regenerate_id(true);
     }
     $_SESSION['born'] ??= $now;
-    $_SESSION['last'] = $now;
+    // Nur ansehen (sitzung.php per GET): zählt nicht als Aktivität
+    if (!(defined('SBCM_SESSION_PEEK') && SBCM_SESSION_PEEK) || !isset($_SESSION['last'])) {
+        $_SESSION['last'] = $now;
+    }
+}
+
+/**
+ * Wann endet die Anmeldung ohne weitere Aktivität? Liefert ['end' => Unix-Zeit, 'stage2' => bool] oder null.
+ * Mit persönlicher Kennung zählt deren (kürzerer) Leerlauf, ohne die gemeinsame Anmeldung.
+ */
+function session_deadline(): ?array
+{
+    if (session_status() !== PHP_SESSION_ACTIVE || !stage1_ok() || !isset($_SESSION['last'], $_SESSION['born'])) {
+        return null;
+    }
+    $end = min((int)$_SESSION['last'] + (int)cfg('auth.idle_minutes', 30) * 60, (int)$_SESSION['born'] + (int)cfg('auth.absolute_hours', 10) * 3600);
+    $s2 = $_SESSION['s2'] ?? null;
+    if (is_array($s2) && !empty($s2['u']) && isset($s2['t'])) {
+        $e2 = (int)$s2['t'] + (int)cfg('auth.stage2_idle_minutes', 15) * 60;
+        if ($e2 > time() && $e2 < $end) {
+            return ['end' => $e2, 'stage2' => true];
+        }
+    }
+    return ['end' => $end, 'stage2' => false];
 }
 
 function bootstrap(): void
@@ -3658,7 +3683,12 @@ function nav(string $active, bool $showLogout = true): void
         echo '<form method="post" action="index.php" class="m-0">' . csrf_field()
             . '<input type="hidden" name="action" value="logout"><button class="btn btn-outline-secondary btn-sm" type="submit">Abmelden</button></form>';
     }
-    echo '</header><div id="inhalt" tabindex="-1"></div>';
+    echo '</header>';
+    if (session_status() === PHP_SESSION_ACTIVE && stage1_ok()) {
+        // Abmeldezeit mit Vorwarnung und Verlängern-Knopf, ohne JavaScript: eigener Rahmen, damit Verlängern keine Eingaben verwirft
+        echo '<iframe class="session-frame" name="sitzung" src="sitzung.php" title="Abmeldung bei Untätigkeit und Sitzung verlängern"></iframe>';
+    }
+    echo '<div id="inhalt" tabindex="-1"></div>';
     if ($s2 && cron_stale()) {
         echo '<div class="alert alert-warning" role="alert"><strong>Cron läuft nicht</strong> (letzter Lauf vor ' . (int)cron_age_minutes()
             . ' Minuten). Ohne Cron gibt es keine Erinnerungen und kein automatisches Ende von Meldungen. '

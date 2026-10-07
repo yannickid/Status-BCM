@@ -365,7 +365,7 @@ echo '</div></div>';
 
 /* Standard-Rufnummer */
 echo '<div class="card shadow-sm mb-3"><div class="card-body"><h2 class="h5">Standard-Rufnummer</h2>';
-echo '<p class="small text-body-secondary">Erscheint bei Meldungen ohne Standortliste und bei jedem Standort ohne eigene Durchwahl. '
+echo '<p class="small text-body-secondary">Erscheint bei Meldungen ohne Standortliste und bei jedem Standort ohne eigene Durchwahl. Gilt für neue und geänderte Meldungen; bereits gesetzte bleiben, wie sie veröffentlicht wurden. '
     . 'Aktuell: <strong>' . h(bcm()['default_phone']) . '</strong>' . (is_string(setting_get('default_phone')) && setting_get('default_phone') !== '' ? '' : ' (aus config.json)') . '</p>';
 echo '<form method="post" action="system.php" autocomplete="off">' . csrf_field() . '<input type="hidden" name="action" value="default_phone">'
     . '<label class="form-label small" for="dp">Neue Rufnummer (leer = Wert aus config.json)</label><input class="form-control mb-2" id="dp" type="tel" name="phone" maxlength="40">'

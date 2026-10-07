@@ -71,3 +71,13 @@ summary{cursor:pointer}
   .aushang-qr{width:90mm}
   .aushang-steps,.aushang-lead{font-size:14pt}
 }
+/* Abmeldezeit (sitzung.php im iframe): Warnung und Ablauf schaltet ein zeitgesteuertes Stylesheet um */
+.session-frame{display:block;width:100%;height:6.25rem;border:0;margin:0 0 .5rem}
+@media (min-width:768px){.session-frame{height:3rem}}
+.session-body{background:transparent;margin:0;font-size:.875rem}
+.sess-stack{display:grid}
+.sess-msg{grid-area:1/1;padding:0 .5rem;border-radius:.375rem}
+.sess-warn,.sess-gone{visibility:hidden}
+@keyframes sbcm-on{0%,100%{visibility:visible}}
+@keyframes sbcm-off{0%,100%{visibility:hidden}}
+@media print{.session-frame{display:none}}
